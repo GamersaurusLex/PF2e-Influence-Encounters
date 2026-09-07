@@ -11,49 +11,71 @@
         <div class="form-group"><label>Canvas Blur</label><div class="form-fields"><input type="number" min="0" max="20" name="backgroundBlur" value="{{encounter.backgroundBlur}}"></div></div>
       </fieldset>
       <fieldset><legend>Encounter Configuration</legend>
-        <div class="form-group"><label>Level</label><div class="form-fields"><input type="number" name="level" value="{{encounter.level}}"></div></div>
+        <div class="form-group"><label>Level</label><div class="form-fields"><input type="number" min="0" max="25" name="level" value="{{encounter.level}}"></div></div>
+        {{#if isResearch}}
+        <div class="form-group"><label>Research Interval</label><div class="form-fields"><input type="number" min="1" name="researchInterval.value" value="{{encounter.researchInterval.value}}"><select name="researchInterval.unit">{{selectOptions intervalUnits selected=encounter.researchInterval.unit}}</select></div></div>
+        <div class="form-group"><label>Current Shared RP</label><div class="form-fields"><input type="number" min="0" name="researchPoints" value="{{encounter.researchPoints}}"></div></div>
+        {{else}}
         <div class="form-group"><label>Phases</label><div class="form-fields"><input type="number" min="1" name="phases" value="{{encounter.phases}}"></div></div>
+        {{/if}}
+        <div class="form-group"><label>Global Progress Clocks</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="progressClock.enabled" {{checked encounter.progressClock.enabled}} {{#unless progressClockAvailable}}disabled{{/unless}}> {{#if isResearch}}Keep a persistent public RP tracker{{else}}Keep a persistent public IP tracker for each target{{/if}}</label></div></div>
+        {{#unless progressClockAvailable}}<p class="hint">Enable the optional Global Progress Clocks module to use this feature. Encounters work normally without it.</p>{{/unless}}
         <div class="form-group"><label>Show Exact Points to Players</label><div class="form-fields"><input type="checkbox" name="publicPoints" {{checked encounter.publicPoints}}></div></div>
       </fieldset>
       <fieldset><legend>Encounter Participants</legend>
         <p class="hint">Party characters are selected by default. Choose them below or drag character Actors from the sidebar and Tokens from the canvas.</p>
         <div class="actor-drop-zone" data-actor-drop="participant"><i class="fa-solid fa-user-plus"></i><strong>Drop participating PCs here</strong><span>Character Actors or Tokens</span></div>
-        {{#if characterActors.length}}<div class="participant-picker">{{#each characterActors}}<label class="checkbox participant-choice"><input type="checkbox" name="partyParticipant" value="{{id}}" {{checked selected}}><img src="{{image}}" alt=""> <span>{{name}}</span></label>{{/each}}</div>{{else}}<p class="hint">No character actors are available in this world.</p>{{/if}}
+        {{#if characterActors.length}}<div class="participant-picker">{{#each characterActors}}<div class="participant-choice"><input type="checkbox" name="partyParticipant" value="{{id}}" {{checked selected}}><img src="{{image}}" alt=""><div><strong>{{name}}</strong><input name="participantNicknames.{{id}}" value="{{nickname}}" placeholder="Optional nickname" aria-label="Nickname for {{name}}"></div></div>{{/each}}</div>{{else}}<p class="hint">No character actors are available in this world.</p>{{/if}}
       </fieldset>
-      <h2>Influence Targets</h2>
-      <p class="hint">Drag Actors from the sidebar or Tokens from the canvas to populate names and images. Background and Personality are GM-only; Appearance is shown to players.</p>
-      <div class="actor-drop-zone" data-actor-drop="npc"><i class="fa-solid fa-user-plus"></i><strong>Drop influence targets here</strong><span>Any Actor or Token</span></div>
+      <h2>{{#if isResearch}}Research Sources{{else}}Influence Targets{{/if}}</h2>
+      <p class="hint">{{#if isResearch}}Add each book, witness, location, or other source the PCs can investigate. Drag Actors, Items, Journals, or Journal pages to reuse their existing names and images.{{else}}Drag Actors from the sidebar or Tokens from the canvas to populate names and images. Background and Personality are GM-only; Appearance is shown to players.{{/if}}</p>
+      <div class="actor-drop-zone" data-actor-drop="npc"><i class="fa-solid {{#if isResearch}}fa-book-open{{else}}fa-user-plus{{/if}}"></i><strong>Drop {{#if isResearch}}research sources{{else}}influence targets{{/if}} here</strong><span>{{#if isResearch}}Actor, Item, Journal, or Journal Page{{else}}Any Actor or Token{{/if}}</span></div>
+      {{#unless encounter.npcs.length}}<p class="hint empty-targets"><i class="fa-solid fa-circle-info"></i> This encounter has no {{#if isResearch}}sources{{else}}targets{{/if}} yet. Use the button below{{#unless isResearch}} or drop an NPC above{{/unless}}.</p>{{/unless}}
       {{#each encounter.npcs}}
       <fieldset class="npc-editor-card"><legend>{{name}}{{#if actorId}} <i class="fa-solid fa-link" title="Linked to a Foundry Actor"></i>{{/if}}</legend>
         <input type="hidden" name="npcs.{{@index}}.id" value="{{id}}"><input type="hidden" name="npcs.{{@index}}.actorId" value="{{actorId}}">
+        {{#unless @root.isResearch}}
+        <div class="actor-drop-zone target-link-drop-zone" data-actor-drop="link-target:{{@index}}"><i class="fa-solid fa-link"></i><strong>{{#if actorId}}Replace linked Actor{{else}}Link this target to an Actor{{/if}}</strong><span>Drop an Actor or Token here; configured mechanics are preserved</span></div>
+        {{#if actorId}}<div class="linked-actor-status"><span><i class="fa-solid fa-circle-check"></i> Linked to {{name}}</span><button type="button" data-action="unlink" data-index="{{@index}}"><i class="fa-solid fa-link-slash"></i> Unlink</button></div>{{/if}}
+        {{/unless}}
         <div class="form-group"><label>Name</label><div class="form-fields"><input name="npcs.{{@index}}.name" value="{{name}}"></div></div>
+        <div class="form-group"><label>Nickname</label><div class="form-fields"><input name="npcs.{{@index}}.nickname" value="{{nickname}}" placeholder="Optional short display name"></div></div>
         <div class="form-group"><label>Portrait</label><div class="form-fields"><file-picker type="image" name="npcs.{{@index}}.image" value="{{image}}"></file-picker></div></div>
-        <div class="form-group"><label>Current IP</label><div class="form-fields"><input type="number" min="0" name="npcs.{{@index}}.points" value="{{points}}"></div></div>
+        <div class="form-group"><label>Current {{#if @root.isResearch}}Source RP{{else}}IP{{/if}}</label><div class="form-fields"><input type="number" min="0" name="npcs.{{@index}}.points" value="{{points}}"></div></div>
+        {{#if @root.isResearch}}<div class="form-group"><label>Maximum RP</label><div class="form-fields"><input type="number" min="0" name="npcs.{{@index}}.maximumPoints" value="{{maximumPoints}}"><select name="npcs.{{@index}}.availability">{{selectOptions @root.availabilityOptions selected=availability}}</select></div></div>
+        <label>Requirements<textarea name="npcs.{{@index}}.requirements">{{requirements}}</textarea></label>
+        <label>Interval Override<input name="npcs.{{@index}}.researchInterval" value="{{researchInterval}}" placeholder="Optional, e.g. 4 hours"></label>
+        <label>Source Description<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
+        <div class="trait-grid"><label>Critical Failure<input type="number" name="npcs.{{@index}}.awards.criticalFailure" value="{{awards.criticalFailure}}"></label><label>Failure<input type="number" name="npcs.{{@index}}.awards.failure" value="{{awards.failure}}"></label><label>Success<input type="number" name="npcs.{{@index}}.awards.success" value="{{awards.success}}"></label><label>Critical Success<input type="number" name="npcs.{{@index}}.awards.criticalSuccess" value="{{awards.criticalSuccess}}"></label></div>
+        {{else}}
         <label>Background<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
         <label>Appearance<textarea name="npcs.{{@index}}.appearance">{{appearance}}</textarea></label>
         <label>Personality<textarea name="npcs.{{@index}}.personality">{{personality}}</textarea></label>
-        <button type="button" data-action="remove" data-type="npc" data-index="{{@index}}"><i class="fas fa-trash"></i> Remove Target</button>
+        {{/if}}
+        <button type="button" data-action="remove" data-type="npc" data-index="{{@index}}"><i class="fas fa-trash"></i> Remove {{#if @root.isResearch}}Source{{else}}Target{{/if}}</button>
       </fieldset>
       {{/each}}
-      <button type="button" data-action="add" data-type="npc"><i class="fas fa-plus"></i> Add Influence Target</button>
+      <button type="button" data-action="add" data-type="npc"><i class="fas fa-plus"></i> Add {{#if isResearch}}Research Source{{else}}Influence Target{{/if}}</button>
     </div>
 
     <div class="tab {{tabs.skills.cssClass}}" data-group="primary" data-tab="skills">
       <datalist id="influence-skill-choices">{{#each skillChoices}}<option value="{{this}}"></option>{{/each}}</datalist>
       {{#each encounter.npcs}}
       <fieldset class="npc-editor-card"><legend>{{name}}</legend>
-        <section class="source-parser"><h3>Import Published Encounter Text</h3><p class="hint">Paste this target's Background, Appearance, Personality, Discovery/Influence DCs, Influence thresholds and rewards, Resistances/Strengths, or Weaknesses. Only recognized sections are replaced. Parenthetical usage notes are ignored.</p><textarea data-parser-source="{{@index}}" placeholder="Background ... Appearance ... Personality ... Discovery DC 20 Art Lore, DC 26 Perception ... Influence DC 24 Diplomacy ... Influence 2 ... Resistances ..."></textarea><button type="button" data-action="parse" data-npc-index="{{@index}}"><i class="fa-solid fa-wand-magic-sparkles"></i> Parse Text for {{name}}</button></section>
+        <section class="source-parser"><h3>Import Published Encounter Text</h3><p class="hint">{{#if @root.isResearch}}Paste a source block containing Maximum Research Points, Research Checks, Requirements, or Description.{{else}}Paste this target's Background, Appearance, Personality, Discovery/Influence DCs, Influence thresholds and rewards, Resistances/Strengths, or Weaknesses. Only recognized sections are replaced.{{/if}}</p><textarea data-parser-source="{{@index}}"></textarea><button type="button" data-action="parse" data-npc-index="{{@index}}"><i class="fa-solid fa-wand-magic-sparkles"></i> Parse Text for {{name}}</button></section>
+        {{#unless @root.isResearch}}
         <h3>Discovery Skills</h3>
         <p class="hint">Perception and Diplomacy are the defaults. Choose a standard skill or type a Lore or homebrew skill; its PF2e slug updates automatically and remains editable.</p>
-        {{#each discovery}}<div class="skill-row"><input type="text" list="influence-skill-choices" data-skill-label name="npcs.{{@../index}}.discovery.{{@index}}.label" value="{{label}}" placeholder="Choose or type a skill"><input type="text" data-skill-slug name="npcs.{{@../index}}.discovery.{{@index}}.slug" value="{{slug}}" placeholder="PF2e slug"><input type="number" name="npcs.{{@../index}}.discovery.{{@index}}.dc" value="{{dc}}"><label><input type="checkbox" name="npcs.{{@../index}}.discovery.{{@index}}.secret" {{checked secret}}> Secret</label><input type="hidden" name="npcs.{{@../index}}.discovery.{{@index}}.id" value="{{id}}"><button type="button" data-action="remove" data-type="discovery:{{@../index}}" data-index="{{@index}}"><i class="fas fa-trash"></i></button></div>{{/each}}
+        {{#each discovery}}<div class="skill-row"><input type="text" list="influence-skill-choices" data-skill-label name="npcs.{{@../index}}.discovery.{{@index}}.label" value="{{label}}" placeholder="Choose or type a skill"><input type="text" data-skill-slug name="npcs.{{@../index}}.discovery.{{@index}}.slug" value="{{slug}}" placeholder="PF2e slug"><input type="number" data-dc-input name="npcs.{{@../index}}.discovery.{{@index}}.dc" value="{{dc}}"><input type="hidden" data-dc-modified name="npcs.{{@../index}}.discovery.{{@index}}.dcModified" value="{{dcModified}}"><label><input type="checkbox" name="npcs.{{@../index}}.discovery.{{@index}}.secret" {{checked secret}}> Secret</label><input type="hidden" name="npcs.{{@../index}}.discovery.{{@index}}.id" value="{{id}}"><button type="button" data-action="remove" data-type="discovery:{{@../index}}" data-index="{{@index}}"><i class="fas fa-trash"></i></button></div>{{/each}}
         <button type="button" data-action="add" data-type="discovery:{{@index}}"><i class="fas fa-plus"></i> Add Discovery Skill</button>
-        <h3>Influence Skills</h3>
-        {{#each influence}}<div class="skill-row"><input type="text" list="influence-skill-choices" data-skill-label name="npcs.{{@../index}}.influence.{{@index}}.label" value="{{label}}" placeholder="Choose or type a skill"><input type="text" data-skill-slug name="npcs.{{@../index}}.influence.{{@index}}.slug" value="{{slug}}" placeholder="PF2e slug"><input type="number" name="npcs.{{@../index}}.influence.{{@index}}.dc" value="{{dc}}"><label><input type="checkbox" name="npcs.{{@../index}}.influence.{{@index}}.lore" {{checked lore}}> Lore</label><input type="hidden" name="npcs.{{@../index}}.influence.{{@index}}.id" value="{{id}}"><button type="button" data-action="remove" data-type="influence:{{@../index}}" data-index="{{@index}}"><i class="fas fa-trash"></i></button></div>{{/each}}
-        <button type="button" data-action="add" data-type="influence:{{@index}}"><i class="fas fa-plus"></i> Add Influence Skill</button>
+        {{/unless}}<h3>{{#if @root.isResearch}}Research Checks{{else}}Influence Skills{{/if}}</h3>
+        {{#each influence}}<div class="skill-row"><input type="text" list="influence-skill-choices" data-skill-label name="npcs.{{@../index}}.influence.{{@index}}.label" value="{{label}}" placeholder="Choose or type a skill"><input type="text" data-skill-slug name="npcs.{{@../index}}.influence.{{@index}}.slug" value="{{slug}}" placeholder="PF2e slug"><input type="number" data-dc-input name="npcs.{{@../index}}.influence.{{@index}}.dc" value="{{dc}}"><input type="hidden" data-dc-modified name="npcs.{{@../index}}.influence.{{@index}}.dcModified" value="{{dcModified}}"><label><input type="checkbox" name="npcs.{{@../index}}.influence.{{@index}}.lore" {{checked lore}}> Lore</label><input type="hidden" name="npcs.{{@../index}}.influence.{{@index}}.id" value="{{id}}"><button type="button" data-action="remove" data-type="influence:{{@../index}}" data-index="{{@index}}"><i class="fas fa-trash"></i></button></div>{{/each}}
+        <button type="button" data-action="add" data-type="influence:{{@index}}"><i class="fas fa-plus"></i> Add {{#if @root.isResearch}}Research Check{{else}}Influence Skill{{/if}}</button>
       </fieldset>
       {{/each}}
     </div>
 
+    {{#unless isResearch}}
     <div class="tab {{tabs.traits.cssClass}}" data-group="primary" data-tab="traits">
       {{#each encounter.npcs}}
       <fieldset class="npc-editor-card"><legend>{{name}}</legend>
@@ -66,8 +88,21 @@
       </fieldset>
       {{/each}}
     </div>
+    {{/unless}}
 
     <div class="tab {{tabs.results.cssClass}}" data-group="primary" data-tab="results">
+      {{#if isResearch}}
+      <p class="hint">Discoveries are unlocked from the encounter's shared Research Point total, regardless of which source produced those points.</p>
+      {{#each encounter.researchThresholds}}
+      <fieldset class="threshold-editor"><legend>{{label}} — {{points}} RP</legend>
+        <div class="form-group"><label>Threshold</label><input type="number" name="researchThresholds.{{@index}}.points" value="{{points}}"><label>Label</label><input name="researchThresholds.{{@index}}.label" value="{{label}}"></div>
+        <textarea name="researchThresholds.{{@index}}.text">{{text}}</textarea><input type="hidden" name="researchThresholds.{{@index}}.id" value="{{id}}">
+        {{#if boons.length}}<h4>Additional Rewards</h4>{{#each boons}}<label>{{label}}<textarea name="researchThresholds.{{@../index}}.boons.{{@index}}.description">{{description}}</textarea><input type="hidden" name="researchThresholds.{{@../index}}.boons.{{@index}}.id" value="{{id}}"><input type="hidden" name="researchThresholds.{{@../index}}.boons.{{@index}}.label" value="{{label}}"></label>{{/each}}{{/if}}
+        <button type="button" data-action="remove" data-type="research-threshold" data-index="{{@index}}"><i class="fas fa-trash"></i> Remove Discovery</button>
+      </fieldset>
+      {{/each}}
+      <button type="button" data-action="add" data-type="research-threshold"><i class="fas fa-plus"></i> Add Discovery</button>
+      {{else}}
       <p class="hint">Narrative and item rewards are display text. Mechanical rewards can target any NPC, apply to rolls or DCs, be conditional, and have limited uses.</p>
       {{#each encounter.npcs}}
       <fieldset class="npc-editor-card"><legend>{{name}}</legend>
@@ -103,6 +138,7 @@
         <button type="button" data-action="add" data-type="threshold:{{@index}}"><i class="fas fa-plus"></i> Add Threshold</button>
       </fieldset>
       {{/each}}
+      {{/if}}
     </div>
   </section>
   <footer class="form-footer"><button type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></footer>

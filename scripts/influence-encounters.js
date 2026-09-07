@@ -15,6 +15,34 @@ const PF2E_SKILLS = [
   "Stealth", "Survival", "Thievery"
 ];
 
+const PF2E_LORE_SKILLS = [
+  "Academia Lore", "Accounting Lore", "Architecture Lore", "Art Lore", "Astronomy Lore", "Carpentry Lore",
+  "Circus Lore", "Driving Lore", "Engineering Lore", "Farming Lore", "Fishing Lore", "Fortune-Telling Lore",
+  "Games Lore", "Genealogy Lore", "Gladiatorial Lore", "Guild Lore", "Heraldry Lore", "Herbalism Lore",
+  "Hunting Lore", "Labor Lore", "Legal Lore", "Library Lore", "Mercantile Lore", "Milling Lore", "Mining Lore",
+  "Piloting Lore", "Sailing Lore", "Scouting Lore", "Scribing Lore", "Stabling Lore", "Tanning Lore",
+  "Theater Lore", "Underworld Lore", "Warfare Lore"
+];
+
+const LORE_CATEGORIES = {
+  "Lore about a specific deity *": ["Abadar Lore", "Iomedae Lore", "Pharasma Lore", "Sarenrae Lore", "Shelyn Lore"],
+  "Lore about a specific creature or narrow category of creatures *": ["Demon Lore", "Dragon Lore", "Giant Lore", "Undead Lore", "Vampire Lore"],
+  "Lore about a specific public organization *": ["Hellknights Lore", "Pathfinder Society Lore", "Aspis Consortium Lore"],
+  "Lore about a specific settlement *": ["Absalom Lore", "Korvosa Lore", "Magnimar Lore", "Sandpoint Lore"],
+  "Lore about a specific terrain *": ["Desert Lore", "Forest Lore", "Mountain Lore", "River Lore", "Swamp Lore"],
+  "Lore about a type of food or drink *": ["Alcohol Lore", "Baking Lore", "Butchering Lore", "Cooking Lore", "Tea Lore"]
+};
+
+const LEVEL_BASED_DCS = [14, 15, 16, 18, 19, 20, 22, 23, 24, 26, 27, 28, 30, 31, 32, 34, 35, 36, 38, 39, 40, 42, 44, 46, 48, 50];
+
+function levelBasedDC(level) {
+  return LEVEL_BASED_DCS[Math.max(0, Math.min(25, Number(level) || 0))];
+}
+
+function automaticSkillDC(encounter, skill = {}) {
+  return Math.max(0, levelBasedDC(encounter?.level) - (isLoreSkill(skill) ? 2 : 0));
+}
+
 function skillSlug(label = "") {
   const standard = PF2E_SKILLS.find((skill) => skill.toLowerCase() === String(label).trim().toLowerCase());
   if (standard) return standard.toLowerCase();
@@ -23,7 +51,7 @@ function skillSlug(label = "") {
 
 function parsedSkill(label, dc, type) {
   const cleanLabel = String(label).replace(/\([^)]*\)/g, "").replace(/^\s*[,;:]\s*/, "").trim();
-  return { id: randomID(), label: cleanLabel, slug: skillSlug(cleanLabel), dc: Number(dc), lore: /\blore$/i.test(cleanLabel), secret: false };
+  return { id: randomID(), label: cleanLabel, slug: skillSlug(cleanLabel), dc: Number(dc), dcModified: true, lore: /\blore$/i.test(cleanLabel), secret: false };
 }
 
 function parseDcSkills(text, type) {
@@ -92,6 +120,35 @@ function parseInfluenceSource(source, npc) {
   return found;
 }
 
+function parseResearchSource(source, npc) {
+  const text = String(source).replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  const found = [];
+  const max = text.match(/\bMaximum\s+(?:Research\s+)?Points?\s*(\d+)/i);
+  if (max) { npc.maximumPoints = Number(max[1]); found.push("maximum RP"); }
+  const checks = sectionText(text, /\b(?:Research\s+Checks?|Checks?)\s*/i, /\b(?:Maximum\s+(?:Research\s+)?Points?|Requirements?|Description|Background)\b/i);
+  if (checks !== null) { npc.influence = parseDcSkills(checks, "research"); found.push(`${npc.influence.length} Research check(s)`); }
+  const requirements = sectionText(text, /\bRequirements?\s*/i, /\b(?:Maximum\s+(?:Research\s+)?Points?|Research\s+Checks?|Checks?|Description|Background)\b/i);
+  if (requirements !== null) { npc.requirements = requirements; found.push("requirements"); }
+  const description = sectionText(text, /\b(?:Description|Background)\s*/i, /\b(?:Maximum\s+(?:Research\s+)?Points?|Research\s+Checks?|Checks?|Requirements?)\b/i);
+  if (description !== null) { npc.background = description; found.push("description"); }
+  return found;
+}
+
+function normalizeReward(boon, targetId = "") {
+  boon.id ||= randomID();
+  boon.kind = ["modifier", "ip", "narrative"].includes(boon.kind) ? boon.kind : (boon.mode === "narrative" ? "narrative" : "modifier");
+  boon.activation = boon.activation === "manual" ? "manual" : "automatic";
+  boon.active = boon.active ?? boon.activation === "automatic";
+  boon.applied ??= false;
+  boon.playerVisible ??= true;
+  boon.targetNpcId ??= targetId;
+  boon.scope ??= "both";
+  boon.mode ??= boon.kind === "narrative" ? "narrative" : "roll";
+  boon.skills = Array.isArray(boon.skills) ? boon.skills : String(boon.skills ?? "").split(",").map((skill) => skill.trim()).filter(Boolean);
+  boon.uses = Math.max(0, Number(boon.uses ?? 999));
+  boon.remaining = Math.max(0, Number(boon.remaining ?? boon.uses));
+}
+
 function indexedArray(value) {
   if (Array.isArray(value)) return value;
   if (!value || typeof value !== "object") return [];
@@ -114,25 +171,56 @@ function isGeneratedPlaceholderNpc(encounter, npc) {
 }
 
 function normalizeEncounterCollections(encounter) {
+  encounter.subsystemType = encounter.subsystemType === "research" ? "research" : "influence";
+  encounter.researchPoints = Math.max(0, Number(encounter.researchPoints) || 0);
+  encounter.researchThresholds = indexedArray(encounter.researchThresholds);
+  encounter.researchThresholds.forEach((threshold) => {
+    threshold.id ||= randomID();
+    threshold.points = Number(threshold.points) || 0;
+    threshold.boons = indexedArray(threshold.boons);
+    threshold.boons.forEach((boon) => normalizeReward(boon));
+  });
+  encounter.researchInterval ??= { value: 1, unit: "hour" };
+  encounter.progressClock = foundry.utils.mergeObject({ enabled: false, clockId: "" }, encounter.progressClock ?? {}, { inplace: false, overwrite: true });
+  encounter.participantNicknames = encounter.participantNicknames && typeof encounter.participantNicknames === "object" ? encounter.participantNicknames : {};
   encounter.discovery = indexedArray(encounter.discovery);
   encounter.influence = indexedArray(encounter.influence);
   encounter.thresholds = indexedArray(encounter.thresholds);
   encounter.thresholds.forEach((threshold) => threshold.boons = indexedArray(threshold.boons));
   encounter.activeEffects = indexedArray(encounter.activeEffects);
   encounter.checkLog = indexedArray(encounter.checkLog);
+  encounter.pendingDiscoveries = indexedArray(encounter.pendingDiscoveries);
   encounter.npcs = indexedArray(encounter.npcs);
-  if (!encounter.npcs.length) encounter.npcs = [{ id: randomID(), name: encounter.name, image: encounter.image, actorId: "" }];
+  // Preserve the legacy single-NPC fallback, but let new multi-NPC drafts begin
+  // empty so their first target must be deliberately added or dropped.
+  if (!encounter.npcs.length && encounter.encounterType !== "multiple") {
+    encounter.npcs = [{ id: randomID(), name: encounter.name, image: encounter.image, actorId: "" }];
+  }
   encounter.npcs.forEach((npc) => {
     npc.id ||= randomID();
     npc.name ||= "Influence Target";
     npc.image ||= "icons/svg/mystery-man.svg";
     npc.actorId ||= "";
+    npc.nickname ??= "";
+    npc.progressClockId ??= "";
     npc.background ??= "";
     npc.appearance ??= "";
     npc.personality ??= "";
     npc.points = Number(npc.points ?? encounter.points) || 0;
+    npc.maximumPoints = Math.max(0, Number(npc.maximumPoints) || 0);
+    npc.availability = ["hidden", "available", "exhausted"].includes(npc.availability) ? npc.availability : "available";
+    npc.requirements ??= "";
+    npc.researchInterval ??= "";
+    npc.awards = foundry.utils.mergeObject({ criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 }, npc.awards ?? {}, { inplace: false, overwrite: true });
+    if (encounter.subsystemType === "research" && npc.maximumPoints && npc.points >= npc.maximumPoints) npc.availability = "exhausted";
     npc.discovery = indexedArray(npc.discovery ?? deepClone(encounter.discovery));
     npc.influence = indexedArray(npc.influence ?? deepClone(encounter.influence));
+    for (const skill of [...npc.discovery, ...npc.influence]) {
+      skill.dc = Number(skill.dc) || 0;
+      // Legacy encounters predate automatic DC tracking. Treat their values as
+      // GM-authored so a future level change can never overwrite them.
+      skill.dcModified = typeof skill.dcModified === "boolean" ? skill.dcModified : skill.dcModified === "false" ? false : true;
+    }
     npc.weakness = foundry.utils.mergeObject(deepClone(encounter.weakness ?? DEFAULT_ENCOUNTER.weakness), npc.weakness ?? {}, { inplace: false, overwrite: true });
     npc.strength = foundry.utils.mergeObject(deepClone(encounter.strength ?? DEFAULT_ENCOUNTER.strength), npc.strength ?? {}, { inplace: false, overwrite: true });
     npc.weakness.mode ??= "roll";
@@ -142,20 +230,7 @@ function normalizeEncounterCollections(encounter) {
       threshold.id ||= randomID();
       threshold.points = Number(threshold.points) || 0;
       threshold.boons = indexedArray(threshold.boons);
-      threshold.boons.forEach((boon) => {
-        boon.id ||= randomID();
-        boon.kind = ["modifier", "ip", "narrative"].includes(boon.kind) ? boon.kind : (boon.mode === "narrative" ? "narrative" : "modifier");
-        boon.activation = boon.activation === "manual" ? "manual" : "automatic";
-        boon.active = boon.active ?? boon.activation === "automatic";
-        boon.applied ??= false;
-        boon.playerVisible ??= true;
-        boon.targetNpcId ??= npc.id;
-        boon.scope ??= "both";
-        boon.mode ??= boon.kind === "narrative" ? "narrative" : "roll";
-        boon.skills = Array.isArray(boon.skills) ? boon.skills : String(boon.skills ?? "").split(",").map((skill) => skill.trim()).filter(Boolean);
-        boon.uses = Math.max(0, Number(boon.uses ?? 999));
-        boon.remaining = Math.max(0, Number(boon.remaining ?? boon.uses));
-      });
+      threshold.boons.forEach((boon) => normalizeReward(boon, npc.id));
     });
   });
   if (encounter.npcs.length > 1 && encounter.npcs.some((npc) => npc.actorId)) {
@@ -170,7 +245,7 @@ function normalizeEncounterCollections(encounter) {
   encounter.journalId ??= "";
   encounter.endedAt ??= null;
   encounter.folderId ??= "";
-  encounter.encounterType = encounter.encounterType === "multiple" ? "multiple" : "single";
+  encounter.encounterType = encounter.subsystemType === "research" || encounter.encounterType === "multiple" ? "multiple" : "single";
   encounter.discoveries ??= {};
   for (const record of Object.values(encounter.discoveries)) {
     record.npcs ??= {};
@@ -185,6 +260,7 @@ const DEFAULT_ENCOUNTER = {
   id: "",
   name: "New Influence Encounter",
   encounterType: "single",
+  subsystemType: "influence",
   image: "icons/svg/mystery-man.svg",
   npcs: [],
   activeNpcId: "",
@@ -198,12 +274,16 @@ const DEFAULT_ENCOUNTER = {
   phases: 4,
   currentPhase: 1,
   points: 0,
+  researchPoints: 0,
+  researchThresholds: [],
+  researchInterval: { value: 1, unit: "hour" },
+  progressClock: { enabled: false, clockId: "" },
   publicPoints: true,
   status: "draft",
   discovery: [
-    { id: "perception", label: "Perception", slug: "perception", dc: 20, secret: false },
-    { id: "diplomacy", label: "Diplomacy", slug: "diplomacy", dc: 20, secret: false },
-    { id: "secret", label: "Secret Discovery Skill", slug: "", dc: 20, secret: true }
+    { id: "perception", label: "Perception", slug: "perception", dc: 14, dcModified: false, secret: false },
+    { id: "diplomacy", label: "Diplomacy", slug: "diplomacy", dc: 14, dcModified: false, secret: false },
+    { id: "secret", label: "Secret Discovery Skill", slug: "", dc: 14, dcModified: false, secret: true }
   ],
   influence: [],
   weakness: { label: "Weakness", description: "", value: 2, type: "circumstance", mode: "roll" },
@@ -215,6 +295,7 @@ const DEFAULT_ENCOUNTER = {
   discoveries: {},
   activeEffects: [],
   checkLog: [],
+  pendingDiscoveries: [],
   history: []
 };
 
@@ -240,7 +321,7 @@ const LANEKAR = {
     ["hobgoblin-lore", "Hobgoblin Lore", 20, true], ["blackfens-lore", "Blackfens Lore", 20, true],
     ["tiri-kitor-lore", "Tiri Kitor Lore", 21, true], ["dragon-lore", "Dragon Lore", 22, true],
     ["haunt-lore", "Haunt Lore", 23, true]
-  ].map(([slug, label, dc, lore]) => ({ id: randomID(), slug, label, dc, lore })),
+  ].map(([slug, label, dc, lore]) => ({ id: randomID(), slug, label, dc, dcModified: true, lore })),
   weakness: {
     label: "Prepare Them to Survive",
     description: "Concrete preparations for the tribe's survival rather than general promises.",
@@ -265,8 +346,8 @@ function peaceNpc({ id, name, discovery, influence, weakness, strength, backgrou
   return {
     id, name, actorId: "", image: "icons/svg/mystery-man.svg", points: 0,
     background, appearance, personality,
-    discovery: discovery.map(([slug, label, dc, secret = false]) => ({ id: randomID(), slug, label, dc, secret })),
-    influence: influence.map(([slug, label, dc, lore = false]) => ({ id: randomID(), slug, label, dc, lore })),
+    discovery: discovery.map(([slug, label, dc, secret = false]) => ({ id: randomID(), slug, label, dc, dcModified: true, secret })),
+    influence: influence.map(([slug, label, dc, lore = false]) => ({ id: randomID(), slug, label, dc, dcModified: true, lore })),
     weakness: weakness ?? { label: "Weakness", description: "", value: 0, type: "circumstance", mode: "dc" },
     strength: strength ?? { label: "Resistance", description: "", value: 0, type: "circumstance", mode: "dc" },
     thresholds: [
@@ -337,6 +418,49 @@ const PEACE_TALKS = {
   activeNpcId: "tsiwak"
 };
 
+function researchSource(id, name, maximumPoints, checks, requirements = "", awards = {}) {
+  return {
+    id, name, actorId: "", image: "icons/svg/book.svg", points: 0, maximumPoints, availability: "available", requirements,
+    researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2, ...awards },
+    background: "", appearance: "", personality: "", discovery: [],
+    influence: checks.map(([slug, label, dc, lore = false]) => ({ id: randomID(), slug, label, dc, dcModified: true, lore })),
+    weakness: { label: "Assistance", description: "", value: 0, type: "circumstance", mode: "roll" },
+    strength: { label: "Difficulty", description: "", value: 0, type: "circumstance", mode: "roll" }, thresholds: []
+  };
+}
+
+const RESEARCHING_THE_EIGHTH = {
+  ...deepClone(DEFAULT_ENCOUNTER),
+  id: "researching-the-eighth", name: "Researching the Eighth", subsystemType: "research", encounterType: "multiple",
+  image: "icons/svg/book.svg", phases: 4, publicPoints: true, researchPoints: 0,
+  researchInterval: { value: 1, unit: "hour" }, discovery: [], influence: [], thresholds: [],
+  npcs: [
+    researchSource("workshop-journals", "Workshop Journals", 4, [["academia-lore", "Academia Lore", 20, true], ["library-lore", "Library Lore", 20, true], ["arcana", "Arcana", 22]], "A PC capable of reading Thassilonian studies the journals and books in the Spy's Workshop."),
+    researchSource("prisoners-manifesto", "Prisoner's Manifesto", 4, [["academia-lore", "Academia Lore", 22, true], ["library-lore", "Library Lore", 22, true], ["arcana", "Arcana", 24]], "A PC capable of reading Thassilonian studies the scribbles carved into the oubliette walls."),
+    researchSource("liralarues-notes", "Liralarue's Notes", 4, [["academia-lore", "Academia Lore", 24, true], ["library-lore", "Library Lore", 24, true], ["arcana", "Arcana", 26]], "A PC capable of reading Thassilonian studies Liralarue's marginal notes."),
+    researchSource("religious-texts", "Religious Texts", 2, [["academia-lore", "Academia Lore", 24, true], ["library-lore", "Library Lore", 24, true], ["religion", "Religion", 26]], "A PC capable of reading Abyssal studies the religious collection."),
+    researchSource("questioning-zalavexus", "Questioning Zalavexus", 4, [["deception", "Deception", 29], ["diplomacy", "Diplomacy", 27], ["intimidation", "Intimidation", 25]], "Question Zalavexus while he remains trapped; the skill reflects lying, promising freedom, or threatening him."),
+    researchSource("workshop-texts", "Workshop Texts", 2, [["academia-lore", "Academia Lore", 26, true], ["library-lore", "Library Lore", 26, true], ["arcana", "Arcana", 28]], "A PC capable of reading Thassilonian studies the workbooks and marginalia in the collection."),
+    researchSource("personal-library", "Liralarue's Personal Library", 4, [["academia-lore", "Academia Lore", 27, true], ["library-lore", "Library Lore", 27, true], ["arcana", "Arcana", 29]], "A PC capable of reading Thassilonian studies the books in Liralarue's bedroom."),
+    researchSource("false-liralarue", "False Liralarue", 4, [["diplomacy", "Diplomacy", 29], ["intimidation", "Intimidation", 34]], "Interrogate the glabrezu that believes itself to be Liralarue.", { criticalFailure: -2 })
+  ],
+  activeNpcId: "workshop-journals",
+  researchThresholds: [
+    [2, "The Pit's Origin", "Karzoug ordered the hidden complex built as a regional spy network, overseen by Liralarue."],
+    [4, "Crystal Discovery", "Liralarue found a divinatory crystal in the upper barracks."],
+    [6, "Liralarue's Methods", "Liralarue relied on subterfuge and trickery more than raw magical power."],
+    [8, "Hidden Laboratories", "She maintained deeper laboratories for variants of the clone ritual."],
+    [10, "Changing Traditions", "She abandoned transmutation for divination, an unheard-of shift among Thassilonian wizards."],
+    [12, "King Xin's Vision", "Her research suggested Xin imagined a cooperative Thassilon rather than one ruled by runelords."],
+    [14, "The Song Key", "A clockwork songbird conceals a key capable of opening a deeper lock."],
+    [16, "The Eighth School", "Liralarue sought an eighth Thassilonian school centered on divination and vainglory."],
+    [18, "Reverse Engineering", "She hoped to transform the Pit into a runewell powered by divination."],
+    [20, "The Clockwork Songbird", "Her notes explain how the songbird and its keyed song open the vault portal."],
+    [22, "Earthfall Foreseen", "Liralarue foresaw Earthfall but could find no way to escape it."],
+    [24, "Liralarue's Glimpse", "The party uncovers Liralarue's defensive divination and the method for teaching it during downtime."]
+  ].map(([points, label, text]) => ({ id: randomID(), points, label, text, boons: points === 24 ? [narrativeReward("A PC can learn and teach Liralarue's Glimpse after 8 hours of downtime and a successful DC 30 Arcana check.", "", 0)] : [] }))
+};
+
 class Store {
   static all() { return deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {}); }
   static activeId() { return game.settings.get(MODULE_ID, SETTINGS.active) ?? ""; }
@@ -346,6 +470,10 @@ class Store {
   }
   static async save(encounter) {
     normalizeEncounterCollections(encounter);
+    if (game.user.isGM) {
+      try { await syncEncounterProgressClocks(encounter); }
+      catch (error) { reportProgressClockError(error); }
+    }
     const all = this.all();
     all[encounter.id] = deepClone(encounter);
     await game.settings.set(MODULE_ID, SETTINGS.encounters, all);
@@ -353,12 +481,84 @@ class Store {
     Hooks.callAll("influenceEncounterUpdated", encounter.id);
   }
   static async remove(id) {
+    const encounter = this.get(id);
+    if (game.user.isGM && encounter) {
+      try { await removeEncounterProgressClocks(encounter); }
+      catch (error) { reportProgressClockError(error); }
+    }
     if (this.activeId() === id) await game.settings.set(MODULE_ID, SETTINGS.active, "");
     const all = this.all();
     delete all[id];
     await game.settings.set(MODULE_ID, SETTINGS.encounters, all);
   }
   static async setActive(id) { await game.settings.set(MODULE_ID, SETTINGS.active, id); }
+}
+
+let progressClockWarningShown = false;
+
+function progressClockDatabase() {
+  if (!game.modules.get("global-progress-clocks")?.active) return null;
+  const database = window.clockDatabase;
+  return database?.get && database?.addClock && database?.update && database?.delete ? database : null;
+}
+
+function reportProgressClockError(error) {
+  console.warn(`${MODULE_ID} | Global Progress Clocks integration failed; encounter data was still saved.`, error);
+  if (progressClockWarningShown) return;
+  progressClockWarningShown = true;
+  ui.notifications.warn("The encounter was saved, but its Global Progress Clock could not be updated.");
+}
+
+async function removeEncounterProgressClocks(encounter) {
+  const database = progressClockDatabase();
+  if (!database || !encounter) return;
+  const ids = new Set([
+    encounter.progressClock?.clockId,
+    ...(encounter.npcs ?? []).map((npc) => npc.progressClockId),
+    ...[...database.values()].filter((clock) => clock.sourceModule === MODULE_ID && clock.sourceEncounterId === encounter.id).map((clock) => clock.id)
+  ].filter(Boolean));
+  const stored = deepClone(game.settings.get("global-progress-clocks", "activeClocks") ?? {});
+  for (const id of ids) delete stored[id];
+  await game.settings.set("global-progress-clocks", "activeClocks", stored);
+  database.refresh?.();
+  game.socket?.emit(SOCKET, { action: "progress-clock-refresh" });
+  if (encounter.progressClock) encounter.progressClock.clockId = "";
+  for (const npc of encounter.npcs ?? []) npc.progressClockId = "";
+}
+
+async function syncEncounterProgressClocks(encounter) {
+  const database = progressClockDatabase();
+  if (!database) return;
+  const shouldDisplay = encounter.progressClock?.enabled && ["active", "paused"].includes(encounter.status);
+  if (!shouldDisplay) return removeEncounterProgressClocks(encounter);
+  const clocks = [];
+  if (encounter.subsystemType === "research") {
+    encounter.progressClock.clockId ||= randomID();
+    const thresholdMaximum = Math.max(0, ...encounter.researchThresholds.map((threshold) => Number(threshold.points) || 0));
+    const sourceMaximum = encounter.npcs.reduce((total, source) => total + (Number(source.maximumPoints) || 0), 0);
+    const max = Math.min(99, Math.max(1, thresholdMaximum, sourceMaximum, Number(encounter.researchPoints) || 0));
+    clocks.push({ id: encounter.progressClock.clockId, name: encounter.name, value: Math.min(max, Math.max(0, Number(encounter.researchPoints) || 0)), max });
+  } else {
+    encounter.progressClock.clockId = "";
+    for (const npc of encounter.npcs) {
+      npc.progressClockId ||= randomID();
+      const thresholdMaximum = Math.max(0, ...npc.thresholds.map((threshold) => Number(threshold.points) || 0));
+      const max = Math.min(99, Math.max(1, thresholdMaximum, Number(npc.points) || 0));
+      clocks.push({ id: npc.progressClockId, name: targetDisplayName(npc), value: Math.min(max, Math.max(0, Number(npc.points) || 0)), max });
+    }
+  }
+  const desiredIds = new Set(clocks.map((clock) => clock.id));
+  const stored = deepClone(game.settings.get("global-progress-clocks", "activeClocks") ?? {});
+  for (const [id, clock] of Object.entries(stored)) {
+    if (clock.sourceModule === MODULE_ID && clock.sourceEncounterId === encounter.id && !desiredIds.has(id)) delete stored[id];
+  }
+  for (const clock of clocks) {
+    const data = { ...clock, type: "points", private: false, sourceModule: MODULE_ID, sourceEncounterId: encounter.id };
+    stored[data.id] = foundry.utils.mergeObject(stored[data.id] ?? {}, data, { inplace: false, overwrite: true });
+  }
+  await game.settings.set("global-progress-clocks", "activeClocks", stored);
+  database.refresh?.();
+  game.socket?.emit(SOCKET, { action: "progress-clock-refresh" });
 }
 
 class FolderStore {
@@ -382,6 +582,24 @@ function participantPortrait(actor) {
   return actor?.prototypeToken?.texture?.src || actor?.img || "icons/svg/mystery-man.svg";
 }
 
+function participantDisplayName(encounter, actor) {
+  return String(encounter?.participantNicknames?.[actor?.id] ?? "").trim() || actor?.name || "Participant";
+}
+
+function targetDisplayName(npc) {
+  return String(npc?.nickname ?? "").trim() || npc?.name || "Target";
+}
+
+function influenceRewardSections(thresholds) {
+  return thresholds.map((threshold) => {
+    const visibleBoons = (threshold.boons ?? []).filter((boon) => boon.playerVisible);
+    const boonList = visibleBoons.length
+      ? `<ul>${visibleBoons.map((boon) => `<li><strong>${esc(boon.label)}</strong>${boon.description || boon.text ? ` — ${esc(boon.description || boon.text)}` : ""}</li>`).join("")}</ul>`
+      : "";
+    return `<section><h4>${esc(threshold.label || "Reward")}</h4>${threshold.text ? `<p>${esc(threshold.text)}</p>` : ""}${boonList}</section>`;
+  }).join("");
+}
+
 async function actorFromDropEvent(event) {
   let data = {};
   try {
@@ -397,27 +615,38 @@ async function actorFromDropEvent(event) {
   return actor ?? (data.actorId ? game.actors.get(data.actorId) : null);
 }
 
+async function documentFromDropEvent(event) {
+  let data = {};
+  try { data = TextEditor.getDragEventData(event); }
+  catch (_error) { try { data = JSON.parse(event.dataTransfer?.getData("text/plain") || "{}"); } catch (_parseError) { return null; } }
+  return data.uuid ? fromUuid(data.uuid) : null;
+}
+
 function findBoon(encounter, boonId) {
-  return encounter.npcs.flatMap((npc) => npc.thresholds).flatMap((threshold) => threshold.boons).find((boon) => boon.id === boonId);
+  return [...encounter.npcs.flatMap((npc) => npc.thresholds), ...(encounter.researchThresholds ?? [])]
+    .flatMap((threshold) => threshold.boons).find((boon) => boon.id === boonId);
 }
 
 function publicEncounterHtml(encounter) {
-  const results = encounter.npcs.map((npc) => {
+  const research = encounter.subsystemType === "research";
+  const results = research ? encounter.npcs.filter((source) => source.availability !== "hidden").map((source) =>
+    `<section><h3>${esc(targetDisplayName(source))}${encounter.publicPoints ? ` — ${source.points}${source.maximumPoints ? `/${source.maximumPoints}` : ""} RP` : ""}</h3>${source.background ? `<p>${esc(source.background)}</p>` : ""}</section>`).join("") : encounter.npcs.map((npc) => {
     const reached = npc.thresholds.filter((threshold) => npc.points >= threshold.points);
     const rewards = reached.map((threshold) => `<article><h4>${esc(threshold.label)}</h4><p>${esc(threshold.text)}</p>${threshold.boons?.filter((boon) => boon.playerVisible).length ? `<ul>${threshold.boons.filter((boon) => boon.playerVisible).map((boon) => `<li><strong>${esc(boon.label)}</strong>${boon.description ? ` — ${esc(boon.description)}` : ""}</li>`).join("")}</ul>` : ""}</article>`).join("");
-    return `<section><h3>${esc(npc.name)}${encounter.publicPoints ? ` — ${npc.points} IP` : ""}</h3>${npc.appearance ? `<p><strong>Appearance:</strong> ${esc(npc.appearance)}</p>` : ""}${rewards}</section>`;
+    return `<section><h3>${esc(targetDisplayName(npc))}${encounter.publicPoints ? ` — ${npc.points} IP` : ""}</h3>${npc.appearance ? `<p><strong>Appearance:</strong> ${esc(npc.appearance)}</p>` : ""}${rewards}</section>`;
   }).join("");
   const rows = encounter.checkLog.map((entry) => {
     const details = (entry.details ?? []).map(concealDiscoveryDC);
     const detailHtml = details.length ? `<ul>${details.map((detail) => `<li>${esc(detail)}</li>`).join("")}</ul>` : "";
-    return `<tr><td>${esc(entry.actorName)}</td><td>${esc(entry.npcName ?? "")}</td><td>${entry.type === "discovery" ? "Discovery" : "Influence"}</td><td>${esc(entry.skillLabel)}</td><td>${esc(String(entry.outcome).replace(/ — Invalid Discovery Skill$/, ""))}${detailHtml}</td></tr>`;
+    return `<tr><td>${esc(entry.actorName)}</td><td>${esc(entry.npcName ?? "")}</td><td>${entry.type === "research" ? "Research" : entry.type === "discovery" ? "Discovery" : "Influence"}</td><td>${esc(entry.skillLabel)}</td><td>${esc(String(entry.outcome).replace(/ — Invalid Discovery Skill$/, ""))}${detailHtml}</td></tr>`;
   }).join("");
   const status = encounter.endedAt ? "Completed" : encounter.status === "paused" ? "Paused" : "In Progress";
-  return `<article class="influence-encounter-archive"><h1>${esc(encounter.name)}</h1><p><strong>${status}</strong> · Phase ${encounter.currentPhase} of ${encounter.phases}</p><section><h2>Targets and Results</h2>${results}</section><section><h2>Check Log</h2>${rows ? `<table><thead><tr><th>PC</th><th>Target</th><th>Check</th><th>Skill</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table>` : "<p>No checks have been completed.</p>"}</section></article>`;
+  const discoveries = research ? encounter.researchThresholds.filter((threshold) => threshold.points <= encounter.researchPoints).map((threshold) => `<article><h4>${esc(threshold.label)} — ${threshold.points} RP</h4><p>${esc(threshold.text)}</p></article>`).join("") : "";
+  return `<article class="influence-encounter-archive"><h1>${esc(encounter.name)}</h1><p><strong>${status}</strong> · ${research ? `${encounter.researchPoints} RP · ${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p><section><h2>${research ? "Sources" : "Targets and Results"}</h2>${results}</section>${research ? `<section><h2>Discoveries</h2>${discoveries}</section>` : ""}<section><h2>Check Log</h2>${rows ? `<table><thead><tr><th>PC</th><th>Target</th><th>Check</th><th>Skill</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table>` : "<p>No checks have been completed.</p>"}</section></article>`;
 }
 
 function encounterJournalName(encounter) {
-  return `Influence: ${encounter.name}${encounter.status === "paused" ? " (Paused)" : ""}`;
+  return `${encounter.subsystemType === "research" ? "Research" : "Influence"}: ${encounter.name}${encounter.status === "paused" ? " (Paused)" : ""}`;
 }
 
 async function syncEncounterJournal(encounter) {
@@ -505,16 +734,21 @@ function canUserControlActor(actor, user = game.user) {
 
 function encounterViewSelection(encounter) {
   if (!encounter) return { actorId: "", npcId: "" };
-  if (game.user.isGM) return { actorId: encounter.activeActorId ?? "", npcId: encounter.activeNpcId ?? encounter.npcs[0]?.id ?? "" };
+  if (game.user.isGM) {
+    const visibleNpcs = encounter.npcs.filter((npc) => npc.availability !== "hidden");
+    const npcId = visibleNpcs.some((npc) => npc.id === encounter.activeNpcId) ? encounter.activeNpcId : visibleNpcs[0]?.id ?? "";
+    return { actorId: encounter.activeActorId ?? "", npcId };
+  }
   const participants = encounterParticipants(encounter);
   const owned = participants.filter((actor) => canUserControlActor(actor));
   const saved = game.settings.get(MODULE_ID, SETTINGS.selections)?.[encounter.id] ?? {};
   const actorId = owned.some((actor) => actor.id === saved.actorId)
     ? saved.actorId
     : owned.find((actor) => actor.id === game.user.character?.id)?.id ?? owned[0]?.id ?? "";
-  const npcId = encounter.npcs.some((npc) => npc.id === saved.npcId)
+  const selectableNpcs = encounter.npcs.filter((npc) => npc.availability !== "hidden");
+  const npcId = selectableNpcs.some((npc) => npc.id === saved.npcId)
     ? saved.npcId
-    : encounter.activeNpcId ?? encounter.npcs[0]?.id ?? "";
+    : selectableNpcs.some((npc) => npc.id === encounter.activeNpcId) ? encounter.activeNpcId : selectableNpcs[0]?.id ?? "";
   return { actorId, npcId };
 }
 
@@ -576,6 +810,40 @@ function concealDiscoveryDC(fact) {
   return text.replace(/\s*\(DC \d+\)(\.)?$/i, "$1");
 }
 
+async function chooseLoreSpecialization(category) {
+  const examples = LORE_CATEGORIES[category] ?? [];
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const dialog = new Dialog({
+      title: category.replace(/\s*\*$/, ""),
+      content: `<form class="lore-specialization-picker"><div class="form-group"><label>Search examples</label><input type="search" name="loreSearch" placeholder="Search Lore examples"></div><div class="lore-example-list">${examples.map((example) => `<button type="button" data-lore-example="${esc(example)}">${esc(example)}</button>`).join("")}</div><hr><div class="form-group"><label>Custom Lore</label><input name="customLore" placeholder="Enter a specific subject"></div><p class="hint">“Lore” is added automatically if it is omitted.</p></form>`,
+      render: (html) => {
+        html.find('[name="loreSearch"]').on("input", (event) => {
+          const query = String(event.currentTarget.value).trim().toLowerCase();
+          html.find("[data-lore-example]").each((_, button) => { button.hidden = !button.dataset.loreExample.toLowerCase().includes(query); });
+        });
+        html.find("[data-lore-example]").on("click", (event) => { finish(event.currentTarget.dataset.loreExample); dialog.close(); });
+      },
+      buttons: {
+        use: { icon: '<i class="fa-solid fa-check"></i>', label: "Use Lore", callback: (html) => {
+          let value = String(html.find('[name="customLore"]').val() ?? "").trim();
+          if (value && !/\bLore$/i.test(value)) value += " Lore";
+          finish(value || null);
+        } },
+        cancel: { label: "Cancel", callback: () => finish(null) }
+      },
+      default: "use",
+      close: () => finish(null)
+    }, { width: 470 });
+    dialog.render(true);
+  });
+}
+
 class InfluenceTracker extends Application {
   constructor(options = {}) { super(options); }
   static get defaultOptions() {
@@ -587,28 +855,43 @@ class InfluenceTracker extends Application {
   }
   getData() {
     const encounter = Store.get();
+    const isResearch = encounter?.subsystemType === "research";
     const participants = encounterParticipants(encounter);
     if (encounter && !participants.some((actor) => actor.id === encounter.activeActorId)) encounter.activeActorId = "";
     const selection = encounterViewSelection(encounter);
-    const actors = participants.map((actor) => ({ id: actor.id, name: actor.name, image: participantPortrait(actor), acted: !!encounter?.actorsActed?.[actor.id] }));
+    const actors = participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter?.actorsActed?.[actor.id] }));
     const controlledActors = actors.filter((entry) => game.user.isGM || canUserControlActor(game.actors.get(entry.id)))
       .map((entry) => ({ ...entry, selected: entry.id === selection.actorId }));
-    const activeNpc = encounter?.npcs.find((npc) => npc.id === selection.npcId) ?? encounter?.npcs[0] ?? null;
-    const thresholds = (activeNpc?.thresholds ?? []).map((threshold) => ({
+    const visibleNpcs = (encounter?.npcs ?? []).filter((npc) => npc.availability !== "hidden");
+    const activeNpcRecord = visibleNpcs.find((npc) => npc.id === selection.npcId) ?? visibleNpcs[0] ?? null;
+    const activeNpc = activeNpcRecord ? { ...activeNpcRecord, name: targetDisplayName(activeNpcRecord) } : null;
+    const thresholdSource = isResearch ? (encounter?.researchThresholds ?? []) : (activeNpcRecord?.thresholds ?? []);
+    const currentPoints = isResearch ? Number(encounter?.researchPoints) : Number(activeNpcRecord?.points);
+    const thresholds = thresholdSource.map((threshold) => ({
       ...threshold,
-      unlocked: activeNpc.points >= threshold.points,
+      unlocked: currentPoints >= threshold.points,
       boons: threshold.boons.filter((boon) => game.user.isGM || boon.playerVisible)
     }));
     const knownDiscoveries = (encounter?.discoveries?.[game.user.id]?.npcs?.[activeNpc?.id]?.facts ?? []).map(concealDiscoveryDC);
+    const pendingByLog = new Map((encounter?.pendingDiscoveries ?? []).map((pending) => [pending.logEntryId, pending]));
     const checkLog = [...(encounter?.checkLog ?? [])].reverse().map((entry) => ({ ...entry,
-      typeLabel: entry.type === "discovery" ? "Discovery" : "Influence",
+      typeLabel: entry.type === "research" ? "Research" : entry.type === "discovery" ? "Discovery" : "Influence",
+      pendingDiscovery: pendingByLog.get(entry.id),
       details: entry.type === "discovery" ? (entry.details ?? []).map(concealDiscoveryDC) : (entry.details ?? []),
       displayOutcome: !game.user.isGM && entry.type === "discovery"
         ? (entry.outcome.includes("Invalid Discovery Skill") ? "Failure" : entry.outcome.startsWith("Critical Success") ? "Critical Success" : entry.outcome.startsWith("Success") ? "Success" : "Failure")
         : entry.outcome
     }));
-    const npcs = (encounter?.npcs ?? []).map((npc) => ({ ...npc, active: npc.id === activeNpc?.id, showPoints: game.user.isGM || encounter.publicPoints }));
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, isGM: game.user.isGM, showPoints: game.user.isGM || encounter?.publicPoints, noEncounter: !encounter, isPaused: encounter?.status === "paused", canAct: !!encounter && encounter.status === "active" && !!selection.actorId, canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused", canPrior: encounter?.status === "active" && (encounter?.currentPhase ?? 1) > 1, canNext: encounter?.status === "active" && (encounter?.currentPhase ?? 1) < (encounter?.phases ?? 1) };
+    const npcs = visibleNpcs.map((npc) => ({ ...npc, name: targetDisplayName(npc), active: npc.id === activeNpc?.id, showPoints: game.user.isGM || encounter.publicPoints }));
+    const sourceAvailable = !isResearch || (activeNpc?.availability === "available" && (!activeNpc.maximumPoints || activeNpc.points < activeNpc.maximumPoints));
+    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, isResearch,
+      pointLabel: isResearch ? "RP" : "IP", targetLabel: isResearch ? "Research Sources" : "Influence Targets",
+      actionLabel: isResearch ? "Research" : "Influence", currentPoints,
+      isGM: game.user.isGM, showPoints: game.user.isGM || encounter?.publicPoints, noEncounter: !encounter, isPaused: encounter?.status === "paused",
+      canAct: !!encounter && encounter.status === "active" && !!selection.actorId && sourceAvailable,
+      canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused",
+      canPrior: !isResearch && encounter?.status === "active" && (encounter?.currentPhase ?? 1) > 1,
+      canNext: !isResearch && encounter?.status === "active" && (encounter?.currentPhase ?? 1) < (encounter?.phases ?? 1) };
   }
   activateListeners(html) {
     super.activateListeners(html);
@@ -672,16 +955,19 @@ class InfluenceTracker extends Application {
       encounter.actorsActed = deepClone(encounter.phaseActions[encounter.currentPhase] ?? {});
     } else if (action === "adjust") {
       const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
-      const value = await promptNumber(`Adjust Influence Points: ${npc.name}`, npc.points);
+      const research = encounter.subsystemType === "research";
+      const value = await promptNumber(research ? "Adjust Research Points" : `Adjust Influence Points: ${targetDisplayName(npc)}`, research ? encounter.researchPoints : npc.points);
       if (value === null) return;
       snapshot(encounter, action);
-      npc.points = Math.max(0, value);
+      if (research) encounter.researchPoints = Math.max(0, value); else npc.points = Math.max(0, value);
     } else if (action === "change-ip") {
       const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
       const delta = Number(event.currentTarget.dataset.delta);
       if (!Number.isFinite(delta) || delta === 0) return;
-      snapshot(encounter, `${npc.name}: ${signed(delta)} IP`);
-      npc.points = Math.max(0, Number(npc.points) + delta);
+      const research = encounter.subsystemType === "research";
+      snapshot(encounter, research ? `${signed(delta)} RP` : `${targetDisplayName(npc)}: ${signed(delta)} IP`);
+      if (research) encounter.researchPoints = Math.max(0, Number(encounter.researchPoints) + delta);
+      else npc.points = Math.max(0, Number(npc.points) + delta);
     } else if (action === "apply-reward") {
       const boon = findBoon(encounter, event.currentTarget.dataset.id);
       const targetNpc = encounter.npcs.find((npc) => npc.id === boon?.targetNpcId);
@@ -693,7 +979,7 @@ class InfluenceTracker extends Application {
       snapshot(encounter, action);
       encounter.actorsActed = {};
     } else if (action === "end-encounter") {
-      if (!await Dialog.confirm({ title: "End Influence Encounter", content: "<p>End this encounter and make its Journal record available to players?</p>" })) return;
+      if (!await Dialog.confirm({ title: "End Encounter", content: "<p>End this encounter and make its Journal record available to players?</p>" })) return;
       snapshot(encounter, action);
       encounter.status = "complete";
       encounter.endedAt = Date.now();
@@ -701,9 +987,19 @@ class InfluenceTracker extends Application {
     } else if (action === "remove-effect") {
       snapshot(encounter, action);
       encounter.activeEffects = encounter.activeEffects.filter((e) => e.id !== event.currentTarget.dataset.id);
+    } else if (action === "resolve-pending-discovery") {
+      const pending = encounter.pendingDiscoveries.find((entry) => entry.id === event.currentTarget.dataset.id);
+      if (!pending) return ui.notifications.info("That Discovery has already been resolved.");
+      const selections = await collectDiscoveryChoices(pending.choices, pending.actorId);
+      if (!selections.length) return;
+      await resolveDiscovery(encounter.id, pending.userId, selections, pending.logEntryId);
+      return this.render(false);
     } else return;
     await Store.save(encounter);
+    game.socket.emit(SOCKET, { action: "refresh" });
     this.render(false);
+    renderCinematicHud();
+    renderInfluenceSidebar();
   }
 }
 
@@ -722,11 +1018,13 @@ function renderCinematicHud() {
   }
   const actor = game.actors.get(encounter.activeActorId);
   const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId) ?? encounter.npcs[0];
+  const actorName = participantDisplayName(encounter, actor);
+  const npcName = targetDisplayName(npc);
   const actorHtml = actor
-    ? `<figure class="influence-speaker influence-speaker-pc"><img src="${esc(participantPortrait(actor))}" alt="${esc(actor.name)}"><figcaption>${esc(actor.name)}</figcaption></figure>`
+    ? `<figure class="influence-speaker influence-speaker-pc"><img src="${esc(participantPortrait(actor))}" alt="${esc(actorName)}"><figcaption>${esc(actorName)}</figcaption></figure>`
     : `<figure class="influence-speaker influence-speaker-empty"><div class="influence-silhouette"><i class="fa-solid fa-user"></i></div><figcaption>Choose a participant</figcaption></figure>`;
   const npcHtml = npc
-    ? `<figure class="influence-speaker influence-speaker-npc"><img src="${esc(npc.image)}" alt="${esc(npc.name)}"><figcaption>${esc(npc.name)}</figcaption></figure>`
+    ? `<figure class="influence-speaker influence-speaker-npc"><img src="${esc(npc.image)}" alt="${esc(npcName)}"><figcaption>${esc(npcName)}</figcaption></figure>`
     : "";
   hud.className = "visible";
   hud.style.setProperty("--influence-blur", `${Number(encounter.backgroundBlur) || 0}px`);
@@ -746,7 +1044,7 @@ function activateInfluenceSidebar() {
     section.classList.toggle("active", active);
     if (active) section.hidden = false;
   });
-  document.getElementById("sidebar-content")?.className && (document.getElementById("sidebar-content").className = "flexcol active-influence-encounters expanded");
+  document.getElementById("sidebar-content")?.classList.add("active-influence-encounters", "expanded");
 }
 
 function renderInfluenceSidebar() {
@@ -767,7 +1065,11 @@ function renderInfluenceSidebar() {
       const influenceButton = tabsMenu.querySelector('[data-tab="influence-encounters"]');
       influenceButton?.classList.remove("active");
       influenceButton?.setAttribute("aria-pressed", "false");
-    }, true);
+      content.classList.remove("active-influence-encounters");
+      const selectedPanel = content.querySelector(`:scope > #${CSS.escape(selectedTab)}`);
+      selectedPanel?.classList.add("active");
+      if (selectedPanel) selectedPanel.hidden = false;
+    });
   }
   let tabButton = tabsMenu.querySelector('[data-tab="influence-encounters"]');
   if (!tabButton) {
@@ -794,14 +1096,24 @@ function renderInfluenceSidebar() {
     panel.innerHTML = '<div class="influence-sidebar-body"><p>No active encounter.</p></div>';
   } else {
     panel.classList.remove("directory");
+    const research = encounter.subsystemType === "research";
     const actors = encounterParticipants(encounter);
     const selection = encounterViewSelection(encounter);
-    const actorRows = actors.map((actor) => `<div class="influence-sidebar-person ${encounter.actorsActed?.[actor.id] ? "acted" : ""}"><img src="${esc(participantPortrait(actor))}" alt=""><span>${esc(actor.name)}</span><i class="fa-solid ${encounter.actorsActed?.[actor.id] ? "fa-check" : "fa-hourglass"}" title="${encounter.actorsActed?.[actor.id] ? "Acted this phase" : "Has not acted"}"></i></div>`).join("");
-    const npcRows = encounter.npcs.map((npc) => `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}" draggable="${game.user.isGM}"><button data-influence-action="select-npc" data-id="${npc.id}" title="Review and target ${esc(npc.name)}"><img src="${esc(npc.image)}" alt=""><span>${esc(npc.name)}</span></button>${game.user.isGM ? `<button class="icon-only" data-influence-action="edit-npc" data-id="${npc.id}" title="Edit"><i class="fa-solid fa-pen"></i></button><button class="icon-only" data-influence-action="remove-npc" data-id="${npc.id}" title="Remove"><i class="fa-solid fa-trash"></i></button>` : ""}</div>`).join("");
-    const activeNpc = encounter.npcs.find((npc) => npc.id === selection.npcId) ?? encounter.npcs[0];
-    panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>Phase ${encounter.currentPhase} of ${encounter.phases}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${activeNpc?.points ?? 0} IP` : "— IP"}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>Influence Targets</h3><div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" ? '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>' : ""}</div></div>`;
+    const actorRows = actors.map((actor) => `<div class="influence-sidebar-person ${encounter.actorsActed?.[actor.id] ? "acted" : ""}"><img src="${esc(participantPortrait(actor))}" alt=""><span>${esc(participantDisplayName(encounter, actor))}</span><i class="fa-solid ${encounter.actorsActed?.[actor.id] ? "fa-check" : "fa-hourglass"}" title="${encounter.actorsActed?.[actor.id] ? "Acted this phase" : "Has not acted"}"></i></div>`).join("");
+    const visibleSources = encounter.npcs.filter((npc) => npc.availability !== "hidden");
+    const npcRows = visibleSources.map((npc) => `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-influence-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${research ? ` <small>${npc.points}${npc.maximumPoints ? `/${npc.maximumPoints}` : ""} RP</small>` : ""}</span></button></div>`).join("");
+    const activeNpc = visibleSources.find((npc) => npc.id === selection.npcId) ?? visibleSources[0];
+    const points = research ? encounter.researchPoints : activeNpc?.points ?? 0;
+    const pointLabel = research ? "RP" : "IP";
+    const actions = research ? '<button data-influence-action="research"><i class="fa-solid fa-book-open"></i> Research</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
+    panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : "Influence Targets"}</h3><div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" ? actions : ""}</div></div>`;
   }
-  panel.querySelectorAll("[data-influence-action]").forEach((button) => button.addEventListener("click", handleSidebarAction));
+  panel.onclick = (event) => {
+    const button = event.target.closest("[data-influence-action]");
+    if (button) return handleSidebarAction({ currentTarget: button });
+    const entry = game.user.isGM ? event.target.closest(".influence-sidebar-encounter") : null;
+    if (entry) return openSidebarEncounter(entry.dataset.entryId);
+  };
   if (game.user.isGM) activateEncounterDirectoryListeners(panel);
 }
 
@@ -846,9 +1158,7 @@ function activateEncounterDirectoryListeners(panel) {
     });
   });
   panel.querySelectorAll(".influence-sidebar-encounter").forEach((entry) => {
-    const open = () => openSidebarEncounter(entry.dataset.entryId);
-    entry.addEventListener("click", open);
-    entry.addEventListener("keydown", (event) => { if (event.key === "Enter") open(); });
+    entry.addEventListener("keydown", (event) => { if (event.key === "Enter") openSidebarEncounter(entry.dataset.entryId); });
     entry.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -996,8 +1306,9 @@ async function openCreateEncounterDialog(event, folderId = "") {
     hasTypes: true,
     type: "single",
     types: [
-      { value: "single", label: "Single NPC" },
-      { value: "multiple", label: "Multiple NPCs" }
+      { value: "single", label: "Influence — Single NPC" },
+      { value: "multiple", label: "Influence — Multiple NPCs" },
+      { value: "research", label: "Research" }
     ],
     typeHint: ""
   });
@@ -1016,11 +1327,20 @@ async function openCreateEncounterDialog(event, folderId = "") {
         const data = new foundry.applications.ux.FormDataExtended(button.form).object;
         const encounter = deepClone(DEFAULT_ENCOUNTER);
         encounter.id = randomID();
-        encounter.name = data.name?.trim() || "New Influence Encounter";
-        encounter.encounterType = data.type === "multiple" ? "multiple" : "single";
+        encounter.subsystemType = data.type === "research" ? "research" : "influence";
+        encounter.name = data.name?.trim() || (encounter.subsystemType === "research" ? "New Research Encounter" : "New Influence Encounter");
+        encounter.encounterType = ["multiple", "research"].includes(data.type) ? "multiple" : "single";
+        if (encounter.subsystemType === "research") {
+          encounter.researchThresholds = [
+            [2, "First Discovery"],
+            [4, "Second Discovery"],
+            [6, "Third Discovery"],
+            [8, "Fourth Discovery"]
+          ].map(([points, label]) => ({ id: randomID(), points, label, text: "", boons: [] }));
+        }
         encounter.folderId = data.folder || "";
         normalizeEncounterCollections(encounter);
-        encounter.npcs[0].name = encounter.name;
+        if (encounter.npcs[0]) encounter.npcs[0].name = encounter.name;
         await Store.save(encounter);
         new EncounterEditor(Store.get(encounter.id)).render({ force: true });
         return encounter;
@@ -1180,7 +1500,7 @@ async function duplicateEncounter(id) {
   Object.assign(duplicate, {
     id: randomID(), name, status: "draft", currentPhase: 1, points: 0,
     activeActorId: "", actorsActed: {}, phaseActions: {}, discoveries: {},
-    activeEffects: [], checkLog: [], history: [], journalId: "", endedAt: null,
+    activeEffects: [], checkLog: [], pendingDiscoveries: [], history: [], journalId: "", endedAt: null,
     presentationVisible: true
   });
   duplicate.npcs.forEach((npc) => {
@@ -1307,7 +1627,7 @@ async function handleSidebarAction(event) {
   const encounter = Store.get();
   if (!encounter) return;
   const selection = encounterViewSelection(encounter);
-  if (["discovery", "influence"].includes(action)) return requestCheck(encounter, action, selection.actorId, selection.npcId);
+  if (["discovery", "influence", "research"].includes(action)) return requestCheck(encounter, action, selection.actorId, selection.npcId);
   if (action === "select-npc" && !game.user.isGM) {
     await setEncounterViewSelection(encounter, { npcId: event.currentTarget.dataset.id });
     renderInfluenceSidebar();
@@ -1331,8 +1651,8 @@ async function editNpc(encounter, npc) {
   if (!npc) return;
   new Dialog({
     title: "Configure Influence Target",
-    content: `<form><div class="form-group"><label>Name</label><input name="name" value="${esc(npc.name)}"></div><div class="form-group"><label>Portrait</label><file-picker name="image" type="imagevideo" value="${esc(npc.image)}"></file-picker></div><label>Background<textarea name="background">${esc(npc.background)}</textarea></label><label>Appearance<textarea name="appearance">${esc(npc.appearance)}</textarea></label><label>Personality<textarea name="personality">${esc(npc.personality)}</textarea></label><p class="hint">Use Edit Encounter for this target's skills, traits, thresholds, and rewards.</p></form>`,
-    buttons: { save: { icon: '<i class="fa-solid fa-save"></i>', label: "Save", callback: async (html) => { npc.name = html.find('[name="name"]').val()?.trim() || npc.name; npc.image = html.find('[name="image"]').val()?.trim() || npc.image; npc.background = html.find('[name="background"]').val()?.trim() || ""; npc.appearance = html.find('[name="appearance"]').val()?.trim() || ""; npc.personality = html.find('[name="personality"]').val()?.trim() || ""; await Store.save(encounter); } }, cancel: { label: "Cancel" } }, default: "save"
+    content: `<form><div class="form-group"><label>Name</label><input name="name" value="${esc(npc.name)}"></div><div class="form-group"><label>Nickname</label><input name="nickname" value="${esc(npc.nickname)}" placeholder="Optional short display name"></div><div class="form-group"><label>Portrait</label><file-picker name="image" type="imagevideo" value="${esc(npc.image)}"></file-picker></div><label>Background<textarea name="background">${esc(npc.background)}</textarea></label><label>Appearance<textarea name="appearance">${esc(npc.appearance)}</textarea></label><label>Personality<textarea name="personality">${esc(npc.personality)}</textarea></label><p class="hint">Use Edit Encounter for this target's skills, traits, thresholds, and rewards.</p></form>`,
+    buttons: { save: { icon: '<i class="fa-solid fa-save"></i>', label: "Save", callback: async (html) => { npc.name = html.find('[name="name"]').val()?.trim() || npc.name; npc.nickname = html.find('[name="nickname"]').val()?.trim() || ""; npc.image = html.find('[name="image"]').val()?.trim() || npc.image; npc.background = html.find('[name="background"]').val()?.trim() || ""; npc.appearance = html.find('[name="appearance"]').val()?.trim() || ""; npc.personality = html.find('[name="personality"]').val()?.trim() || ""; await Store.save(encounter); } }, cancel: { label: "Cancel" } }, default: "save"
   }).render(true);
 }
 
@@ -1367,6 +1687,7 @@ class EncounterManager extends Application {
     if (action === "new") return openCreateEncounterDialog(event);
     if (action === "sample") return new EncounterEditor(deepClone(LANEKAR)).render({ force: true });
     if (action === "peace-sample") return new EncounterEditor(deepClone(PEACE_TALKS)).render({ force: true });
+    if (action === "research-sample") return new EncounterEditor(deepClone(RESEARCHING_THE_EIGHTH)).render({ force: true });
     if (action === "edit") return new EncounterEditor(Store.get(id)).render({ force: true });
     if (action === "activate") {
       await activateEncounter(id);
@@ -1387,7 +1708,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this._dirty = false;
     this._forceClose = false;
   }
-  get title() { return `Encounter: ${this.encounter?.name || "New Influence Encounter"}`; }
+  get title() { return `Encounter: ${this.encounter?.name || (this.encounter?.subsystemType === "research" ? "New Research Encounter" : "New Influence Encounter")}`; }
   static DEFAULT_OPTIONS = {
     id: "influence-encounter-editor",
     tag: "form",
@@ -1395,7 +1716,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     position: { width: 860, height: 780 },
     window: { icon: "fa-solid fa-comments", resizable: true, contentClasses: ["standard-form", "influence-editor"] },
     form: { closeOnSubmit: false, handler: EncounterEditor.#onSubmit },
-    actions: { add: EncounterEditor.#onAdd, remove: EncounterEditor.#onRemove, parse: EncounterEditor.#onParse }
+    actions: { add: EncounterEditor.#onAdd, remove: EncounterEditor.#onRemove, parse: EncounterEditor.#onParse, unlink: EncounterEditor.#onUnlink }
   };
   static PARTS = {
     form: { template: `modules/${MODULE_ID}/templates/editor.hbs`, root: true, scrollable: [".content"] }
@@ -1413,29 +1734,50 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   };
   async _prepareContext(options) {
     const context = await super._prepareContext(options);
+    const isResearch = this.encounter.subsystemType === "research";
     const selected = new Set(Array.isArray(this.encounter.participantIds)
       ? this.encounter.participantIds
       : defaultPartyCharacters().map((actor) => actor.id));
-    const characterActors = allCharacters().map((actor) => ({ id: actor.id, name: actor.name, image: participantPortrait(actor), selected: selected.has(actor.id) }));
+    const characterActors = allCharacters().map((actor) => ({
+      id: actor.id, name: actor.name, nickname: this.encounter.participantNicknames?.[actor.id] ?? "",
+      image: participantPortrait(actor), selected: selected.has(actor.id)
+    }));
+    const tabs = this._prepareTabs("primary");
+    if (isResearch) {
+      delete tabs.traits;
+      tabs.results.label = "Discoveries";
+      tabs.results.icon = "fa-solid fa-lightbulb";
+    }
     return {
       ...context,
       encounter: this.encounter,
+      isResearch,
+      progressClockAvailable: !!progressClockDatabase(),
       characterActors,
-      skillChoices: PF2E_SKILLS,
-      tabs: this._prepareTabs("primary"),
+      skillChoices: [...PF2E_SKILLS, ...PF2E_LORE_SKILLS, ...Object.keys(LORE_CATEGORIES)],
+      tabs,
       modifierTypes: { circumstance: "Circumstance", status: "Status", item: "Item", untyped: "Untyped" },
       traitModes: { roll: "Roll modifier", dc: "DC adjustment", narrative: "Narrative only" },
       boonModes: { roll: "Roll bonus", dc: "DC adjustment", narrative: "Narrative" },
       boonScopes: { both: "Both", discovery: "Discovery", influence: "Influence", external: "Outside this encounter" },
       rewardKinds: { modifier: "Mechanical modifier", ip: "IP adjustment", narrative: "Narrative reward" },
       rewardActivations: { automatic: "Automatic", manual: "GM applies" },
-      npcTargets: Object.fromEntries(this.encounter.npcs.map((npc) => [npc.id, npc.name]))
+      availabilityOptions: { hidden: "Hidden", available: "Available", exhausted: "Exhausted" },
+      intervalUnits: { minute: "Minutes", hour: "Hours", day: "Days" },
+      npcTargets: Object.fromEntries(this.encounter.npcs.map((npc) => [npc.id, targetDisplayName(npc)]))
     };
   }
   async _onRender(context, options) {
     await super._onRender(context, options);
     this.element.addEventListener("input", () => { this._dirty = true; });
     this.element.addEventListener("change", () => { this._dirty = true; });
+    this.element.querySelectorAll('[name^="participantNicknames."]').forEach((input) => input.addEventListener("input", () => {
+      this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
+    }));
+    this.element.querySelectorAll('[name$=".nickname"]').forEach((input) => input.addEventListener("input", () => {
+      const index = Number(input.name.match(/^npcs\.(\d+)\.nickname$/)?.[1]);
+      if (Number.isInteger(index) && this.encounter.npcs[index]) this.encounter.npcs[index].nickname = input.value.trim();
+    }));
     this.element.querySelector('[name="name"]')?.addEventListener("input", (event) => {
       const name = event.currentTarget.value.trim() || "New Influence Encounter";
       this.element.querySelector(".window-title").textContent = `Encounter: ${name}`;
@@ -1446,47 +1788,124 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       zone.addEventListener("dragleave", (event) => { if (!zone.contains(event.relatedTarget)) zone.classList.remove("dragover"); });
       zone.addEventListener("drop", (event) => this._onActorDrop(event, zone.dataset.actorDrop));
     }
-    this.element.querySelectorAll("input[data-skill-label]").forEach((input) => input.addEventListener("input", () => {
-      const slugInput = input.closest(".skill-row")?.querySelector("input[data-skill-slug]");
-      if (slugInput) slugInput.value = skillSlug(input.value);
+    const refreshAutomaticDc = (row) => {
+      const modified = row?.querySelector("[data-dc-modified]");
+      const dcInput = row?.querySelector("[data-dc-input]");
+      const labelInput = row?.querySelector("[data-skill-label]");
+      if (!row || !dcInput || modified?.value === "true") return;
+      const lore = row.querySelector('input[type="checkbox"][name$=".lore"]')?.checked || /\bLore$/i.test(labelInput?.value ?? "");
+      dcInput.value = Math.max(0, levelBasedDC(this.element.querySelector('[name="level"]')?.value ?? this.encounter.level) - (lore ? 2 : 0));
+    };
+    this.element.querySelector('[name="level"]')?.addEventListener("input", () => {
+      this.element.querySelectorAll(".skill-row").forEach(refreshAutomaticDc);
+    });
+    this.element.querySelectorAll("[data-dc-input]").forEach((input) => input.addEventListener("input", () => {
+      const modified = input.closest(".skill-row")?.querySelector("[data-dc-modified]");
+      if (modified) modified.value = "true";
     }));
+    this.element.querySelectorAll("input[data-skill-label]").forEach((input) => {
+      input.addEventListener("focus", () => { input.dataset.previousValue = input.value; });
+      input.addEventListener("input", () => {
+        const row = input.closest(".skill-row");
+        const slugInput = row?.querySelector("input[data-skill-slug]");
+        const loreInput = row?.querySelector('input[type="checkbox"][name$=".lore"]');
+        if (slugInput) slugInput.value = skillSlug(input.value.replace(/\s*\*$/, ""));
+        if (loreInput && (/\bLore$/i.test(input.value.trim()) || Object.hasOwn(LORE_CATEGORIES, input.value))) loreInput.checked = true;
+        refreshAutomaticDc(row);
+      });
+      input.addEventListener("change", async () => {
+        if (!LORE_CATEGORIES[input.value]) return;
+        const previous = input.dataset.previousValue ?? "";
+        const selected = await chooseLoreSpecialization(input.value);
+        input.value = selected ?? previous;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    });
+    this.element.querySelectorAll('input[type="checkbox"][name$=".lore"]').forEach((input) => input.addEventListener("change", () => refreshAutomaticDc(input.closest(".skill-row"))));
   }
   async _onActorDrop(event, destination) {
     event.preventDefault();
     event.currentTarget.classList.remove("dragover");
-    const actor = await actorFromDropEvent(event);
-    if (!actor) return ui.notifications.warn("Drop an Actor from the sidebar or a Token from the canvas.");
+    const dropped = await documentFromDropEvent(event);
+    const actor = dropped?.documentName === "Token" ? dropped.actor : dropped?.documentName === "Actor" ? dropped : await actorFromDropEvent(event);
+    const [dropType, dropIndex] = destination.split(":");
+    if (!actor && !(dropType === "npc" && this.encounter.subsystemType === "research" && ["Item", "JournalEntry", "JournalEntryPage"].includes(dropped?.documentName))) return ui.notifications.warn(this.encounter.subsystemType === "research" ? "Drop an Actor, Item, Journal, or Journal page." : "Drop an Actor from the sidebar or a Token from the canvas.");
     this._capture();
-    if (destination === "participant") {
+    if (dropType === "link-target") {
+      const npc = this.encounter.npcs[Number(dropIndex)];
+      if (!npc || !actor) return ui.notifications.warn("Drop an Actor from the sidebar or a Token from the canvas.");
+      if (this.encounter.npcs.some((entry) => entry !== npc && entry.actorId === actor.id)) return ui.notifications.warn(`${actor.name} is already linked to another influence target.`);
+      npc.actorId = actor.id;
+      npc.name = actor.name;
+      npc.image = participantPortrait(actor);
+      this._dirty = true;
+      ui.notifications.info(`Linked this influence target to ${actor.name}. Its encounter mechanics were preserved.`);
+      return this.render({ force: true });
+    }
+    if (dropType === "participant") {
       if (actor.type !== "character") return ui.notifications.warn(`${actor.name} is not a player character and cannot be added as a participant.`);
       this.encounter.participantIds ??= [];
       if (this.encounter.participantIds.includes(actor.id)) return ui.notifications.info(`${actor.name} is already participating.`);
       this._dirty = true;
       this.encounter.participantIds.push(actor.id);
       ui.notifications.info(`Added ${actor.name} as a participant.`);
-    } else if (destination === "npc") {
+    } else if (dropType === "npc") {
+      if (!actor && this.encounter.subsystemType === "research") {
+        const image = dropped.src || dropped.img || dropped.parent?.img || "icons/svg/book.svg";
+        const created = { id: randomID(), actorId: "", sourceUuid: dropped.uuid, name: dropped.name || "Research Source", image, points: 0, maximumPoints: 4,
+          availability: "available", requirements: "", researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
+          background: "", appearance: "", personality: "", discovery: [], influence: [], thresholds: [] };
+        this.encounter.npcs.push(created);
+        this.encounter.activeNpcId = created.id;
+        this._dirty = true;
+        ui.notifications.info(`Added ${created.name} as a research source.`);
+        return this.render({ force: true });
+      }
       if (this.encounter.npcs.some((npc) => npc.actorId === actor.id)) return ui.notifications.info(`${actor.name} is already an influence target.`);
       this._dirty = true;
+      const research = this.encounter.subsystemType === "research";
       const created = { id: randomID(), actorId: actor.id, name: actor.name, image: participantPortrait(actor), points: 0,
+        maximumPoints: research ? 4 : 0, availability: "available", requirements: "", researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
         background: "", appearance: "", personality: "", discovery: deepClone(DEFAULT_ENCOUNTER.discovery.slice(0, 2)), influence: [], thresholds: [],
         weakness: { label: "Weakness", description: "", value: 0, type: "circumstance", mode: "roll" },
         strength: { label: "Resistance", description: "", value: 0, type: "circumstance", mode: "roll" } };
       const placeholder = this.encounter.npcs.length === 1 && isGeneratedPlaceholderNpc(this.encounter, this.encounter.npcs[0]);
+      if (!research) created.discovery.forEach((skill) => { if (!skill.dcModified) skill.dc = automaticSkillDC(this.encounter, skill); });
       if (placeholder) this.encounter.npcs[0] = created;
       else this.encounter.npcs.push(created);
       this.encounter.activeNpcId = created.id;
       this.encounter.encounterType = this.encounter.npcs.length > 1 ? "multiple" : "single";
-      ui.notifications.info(`Added ${actor.name} as an influence target.`);
+      ui.notifications.info(`Added ${actor.name} as a ${research ? "research source" : "influence target"}.`);
     } else return;
     await this.render({ force: true });
   }
-  _capture(formData = new foundry.applications.ux.FormDataExtended(this.element).object) {
+  _mergeFormData(formData) {
     const expanded = foundry.utils.expandObject(formData);
+    const npcUpdates = indexedArray(expanded.npcs);
+    const thresholdUpdates = indexedArray(expanded.researchThresholds);
+    delete expanded.npcs;
+    delete expanded.researchThresholds;
     foundry.utils.mergeObject(this.encounter, expanded, { inplace: true, overwrite: true });
+    npcUpdates.forEach((update, index) => {
+      const existing = this.encounter.npcs[index];
+      if (existing) foundry.utils.mergeObject(existing, update, { inplace: true, overwrite: true });
+    });
+    thresholdUpdates.forEach((update, index) => {
+      const existing = this.encounter.researchThresholds[index];
+      if (existing) foundry.utils.mergeObject(existing, update, { inplace: true, overwrite: true });
+    });
+  }
+  _capture(formData = new foundry.applications.ux.FormDataExtended(this.element).object) {
+    this._mergeFormData(formData);
     normalizeEncounterCollections(this.encounter);
     this.encounter.publicPoints = this.element.querySelector('[name="publicPoints"]')?.checked ?? false;
+    this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
     this.encounter.participantIds = [...this.element.querySelectorAll('[name="partyParticipant"]:checked')].map((input) => input.value);
+    for (const input of this.element.querySelectorAll('[name^="participantNicknames."]')) {
+      this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
+    }
     this.encounter.npcs.forEach((npc, npcIndex) => {
+      npc.nickname = this.element.querySelector(`[name="npcs.${npcIndex}.nickname"]`)?.value.trim() ?? "";
       npc.discovery.forEach((skill, skillIndex) => skill.secret = this.element.querySelector(`[name="npcs.${npcIndex}.discovery.${skillIndex}.secret"]`)?.checked ?? false);
       npc.influence.forEach((skill, skillIndex) => skill.lore = this.element.querySelector(`[name="npcs.${npcIndex}.influence.${skillIndex}.lore"]`)?.checked ?? false);
       npc.thresholds.forEach((threshold, thresholdIndex) => threshold.boons.forEach((boon, boonIndex) => {
@@ -1511,34 +1930,47 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const npcIndex = Number(target.dataset.npcIndex);
     const npc = this.encounter.npcs[npcIndex];
     const source = this.element.querySelector(`[data-parser-source="${npcIndex}"]`)?.value?.trim();
-    if (!npc || !source) return ui.notifications.warn("Paste the NPC's influence text before parsing.");
-    const found = parseInfluenceSource(source, npc);
-    if (!found.length) return ui.notifications.warn("No recognizable narrative, Discovery, Influence, threshold, Resistance, or Weakness sections were found.");
+    if (!npc || !source) return ui.notifications.warn(`Paste the ${this.encounter.subsystemType === "research" ? "source's research" : "NPC's influence"} text before parsing.`);
+    const found = this.encounter.subsystemType === "research" ? parseResearchSource(source, npc) : parseInfluenceSource(source, npc);
+    if (!found.length) return ui.notifications.warn("No recognizable sections were found.");
     this._dirty = true;
     ui.notifications.info(`Parsed ${npc.name}: ${found.join(", ")}. Review the generated fields before saving.`);
+    await this.render({ force: true });
+  }
+  static async #onUnlink(_event, target) {
+    this._capture();
+    const npc = this.encounter.npcs[Number(target.dataset.index)];
+    if (!npc?.actorId) return;
+    npc.actorId = "";
+    this._dirty = true;
+    ui.notifications.info(`${npc.name} is no longer linked to a Foundry Actor. Its current name and portrait were retained.`);
     await this.render({ force: true });
   }
   _add(type) {
     const [kind, npcIndex, thresholdIndex] = type.split(":");
     const npc = this.encounter.npcs[Number(npcIndex)];
     if (kind === "npc") {
-      const created = { id: randomID(), name: "New Influence Target", image: "icons/svg/mystery-man.svg", actorId: "", points: 0,
+      const research = this.encounter.subsystemType === "research";
+      const created = { id: randomID(), name: research ? "New Research Source" : "New Influence Target", image: research ? "icons/svg/book.svg" : "icons/svg/mystery-man.svg", actorId: "", points: 0,
+        maximumPoints: research ? 4 : 0, availability: "available", requirements: "", researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
         background: "", appearance: "", personality: "", discovery: deepClone(DEFAULT_ENCOUNTER.discovery.slice(0, 2)), influence: [], thresholds: [],
         weakness: { label: "Weakness", description: "", value: 0, type: "circumstance", mode: "dc" },
         strength: { label: "Resistance", description: "", value: 0, type: "circumstance", mode: "dc" } };
+      if (!research) created.discovery.forEach((skill) => { if (!skill.dcModified) skill.dc = automaticSkillDC(this.encounter, skill); });
       this.encounter.npcs.push(created);
       this.encounter.activeNpcId = created.id;
     }
-    if (kind === "discovery" && npc) npc.discovery.push({ id: randomID(), slug: "", label: "", dc: 20, lore: false, secret: false });
-    if (kind === "influence" && npc) npc.influence.push({ id: randomID(), slug: "", label: "", dc: 20, lore: false });
+    if (kind === "discovery" && npc) npc.discovery.push({ id: randomID(), slug: "", label: "", dc: automaticSkillDC(this.encounter), dcModified: false, lore: false, secret: false });
+    if (kind === "influence" && npc) npc.influence.push({ id: randomID(), slug: "", label: "", dc: automaticSkillDC(this.encounter), dcModified: false, lore: false });
     if (kind === "threshold" && npc) npc.thresholds.push({ id: randomID(), points: 0, label: "", text: "", boons: [] });
     if (kind === "boon" && npc) npc.thresholds[Number(thresholdIndex)]?.boons.push({ id: randomID(), kind: "narrative", label: "New Reward", description: "", value: 0, type: "circumstance", mode: "narrative", scope: "both", skills: [], uses: 0, remaining: 0, activation: "automatic", active: true, applied: false, targetNpcId: npc.id, playerVisible: true });
+    if (kind === "research-threshold") this.encounter.researchThresholds.push({ id: randomID(), points: 0, label: "New Discovery", text: "", boons: [] });
   }
   _remove(type, index) {
     const [kind, npcIndex, thresholdIndex] = type.split(":");
     const npc = this.encounter.npcs[Number(npcIndex)];
     if (kind === "npc") {
-      if (this.encounter.npcs.length <= 1) {
+      if (this.encounter.npcs.length <= 1 && this.encounter.subsystemType !== "research") {
         ui.notifications.warn("An influence encounter must have at least one target.");
         return false;
       }
@@ -1549,21 +1981,33 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     if (kind === "influence" && npc) npc.influence.splice(index, 1);
     if (kind === "threshold" && npc) npc.thresholds.splice(index, 1);
     if (kind === "boon" && npc) npc.thresholds[Number(thresholdIndex)]?.boons.splice(index, 1);
+    if (kind === "research-threshold") this.encounter.researchThresholds.splice(index, 1);
     return true;
   }
   static async #onSubmit(_event, _form, formData) {
-    await this._save(formData.object);
+    if (await this._save(formData.object) !== false) await this.render({ force: true });
   }
   async _save(formData) {
     try {
-      foundry.utils.mergeObject(this.encounter, foundry.utils.expandObject(formData), { inplace: true, overwrite: true });
+      this._mergeFormData(formData);
       normalizeEncounterCollections(this.encounter);
       this.encounter.publicPoints = this.element.querySelector('[name="publicPoints"]')?.checked ?? false;
+      this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
       this.encounter.participantIds = [...this.element.querySelectorAll('[name="partyParticipant"]:checked')].map((input) => input.value);
+      for (const input of this.element.querySelectorAll('[name^="participantNicknames."]')) {
+        this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
+      }
       this.encounter.id ||= randomID();
       this.encounter.phases = Number(this.encounter.phases) || 4;
+      if (!this.encounter.npcs.length) {
+        ui.notifications.warn(`Add at least one ${this.encounter.subsystemType === "research" ? "Research Source" : "Influence Target"} before saving this encounter.`);
+        return false;
+      }
       this.encounter.npcs.forEach((npc, npcIndex) => {
+        npc.nickname = this.element.querySelector(`[name="npcs.${npcIndex}.nickname"]`)?.value.trim() ?? "";
         npc.points = Math.max(0, Number(npc.points) || 0);
+        npc.maximumPoints = Math.max(0, Number(npc.maximumPoints) || 0);
+        for (const key of ["criticalFailure", "failure", "success", "criticalSuccess"]) npc.awards[key] = Number(npc.awards[key]) || 0;
         npc.discovery.forEach((skill, skillIndex) => { skill.dc = Number(skill.dc); skill.secret = this.element.querySelector(`[name="npcs.${npcIndex}.discovery.${skillIndex}.secret"]`)?.checked ?? false; });
         npc.influence.forEach((skill, skillIndex) => { skill.dc = Number(skill.dc); skill.lore = this.element.querySelector(`[name="npcs.${npcIndex}.influence.${skillIndex}.lore"]`)?.checked ?? false; });
         npc.weakness.value = Number(npc.weakness.value) || 0;
@@ -1579,10 +2023,14 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
           });
         });
       });
+      this.encounter.researchPoints = Math.max(0, Number(this.encounter.researchPoints) || 0);
+      this.encounter.researchInterval.value = Math.max(1, Number(this.encounter.researchInterval.value) || 1);
+      this.encounter.researchThresholds.forEach((threshold) => threshold.points = Math.max(0, Number(threshold.points) || 0));
       this.encounter.backgroundBlur = Math.max(0, Math.min(20, Number(this.encounter.backgroundBlur) || 0));
       await Store.save(this.encounter);
       this._dirty = false;
       ui.notifications.info(`${this.encounter.name} saved.`);
+      return true;
     } catch (error) {
       console.error(`${MODULE_ID} | Failed to save encounter`, error);
       ui.notifications.error(`Could not save ${this.encounter.name}. See the console for details.`);
@@ -1613,7 +2061,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     if (choice === "cancel") return this;
     if (choice === "save") {
       const formData = new foundry.applications.ux.FormDataExtended(this.element).object;
-      await this._save(formData);
+      if (await this._save(formData) === false) return this;
     }
     this._forceClose = true;
     return super.close(options);
@@ -1622,14 +2070,17 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
 
 async function requestCheck(encounter, type, selectedActorId = null, selectedNpcId = null) {
   const npc = encounter.npcs.find((entry) => entry.id === selectedNpcId) ?? encounter.npcs.find((entry) => entry.id === encounter.activeNpcId) ?? encounter.npcs[0];
-  if (!npc) return ui.notifications.warn("Choose an influence target first.");
+  const isResearch = type === "research" || encounter.subsystemType === "research";
+  if (!npc) return ui.notifications.warn(isResearch ? "Choose a research source first." : "Choose an influence target first.");
+  if (isResearch && (npc.availability !== "available" || (npc.maximumPoints && npc.points >= npc.maximumPoints))) return ui.notifications.warn(`${npc.name} is not currently available for further research.`);
   const actor = (selectedActorId ? game.actors.get(selectedActorId) : null)
     ?? canvas.tokens.controlled[0]?.actor
     ?? game.user.character;
   if (!actor) return ui.notifications.warn("Select a participant, select a character token, or assign a user character first.");
+  const npcName = targetDisplayName(npc);
   if (!encounterParticipants(encounter).some((participant) => participant.id === actor.id)) return ui.notifications.warn(`${actor.name} is not participating in this encounter.`);
   if (!game.user.isGM && !canUserControlActor(actor)) return ui.notifications.warn(`You must be an Owner of ${actor.name} to act for that character.`);
-  if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this phase.`);
+  if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this ${isResearch ? "research interval" : "phase"}.`);
   let options = "";
   if (type === "discovery") {
     const perception = npc.discovery.find((skill) => skill.slug === "perception");
@@ -1641,12 +2092,12 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
     options = `${primary}<option disabled>──────────</option>${remaining}`;
   } else {
     const skills = availableSkillsForActor(actor, npc.influence);
-    if (!skills.length) return ui.notifications.warn(`${actor.name} has none of the configured Influence skills.`);
+    if (!skills.length) return ui.notifications.warn(`${actor.name} has none of the configured ${isResearch ? "Research" : "Influence"} skills.`);
     options = skills.map((skill) => `<option value="configured:${skill.id}">${esc(skill.label)}</option>`).join("");
   }
   new Dialog({
-    title: `${type.titleCase()} Check: ${npc.name}`,
-    content: `<form><p>Target: <strong>${esc(npc.name)}</strong></p><div class="form-group"><label>Skill</label><select name="skill">${options}</select></div></form>`,
+    title: `${isResearch ? "Research" : type.titleCase()} Check: ${npcName}`,
+    content: `<form><p>${isResearch ? "Source" : "Target"}: <strong>${esc(npcName)}</strong></p>${isResearch && npc.requirements ? `<p class="hint"><strong>Requirements:</strong> ${esc(npc.requirements)}</p>` : ""}<div class="form-group"><label>Skill</label><select name="skill">${options}</select></div></form>`,
     buttons: { request: { icon: '<i class="fas fa-paper-plane"></i>', label: "Request Check", callback: (html) => {
       const selection = String(html.find('[name="skill"]').val());
       const [source, value] = selection.split(":");
@@ -1659,7 +2110,9 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
 }
 
 function applicableBoons(encounter, request, skill) {
-  const unlocked = encounter.npcs.flatMap((npc) => npc.thresholds.flatMap((threshold) => threshold.points <= npc.points ? threshold.boons : []));
+  const unlocked = encounter.subsystemType === "research"
+    ? encounter.researchThresholds.flatMap((threshold) => threshold.points <= encounter.researchPoints ? threshold.boons : [])
+    : encounter.npcs.flatMap((npc) => npc.thresholds.flatMap((threshold) => threshold.points <= npc.points ? threshold.boons : []));
   return [...unlocked, ...(encounter.activeEffects ?? [])].filter((b) => {
     if ((b.kind ?? "modifier") !== "modifier") return false;
     if (b.targetNpcId && b.targetNpcId !== request.npcId) return false;
@@ -1675,9 +2128,12 @@ async function adjudicate(request) {
   if (!game.user.isGM) return;
   const encounter = Store.get(request.encounterId);
   const actor = game.actors.get(request.actorId);
-  if (!encounter || !actor) return ui.notifications.error("The requested influence check is no longer available.");
+  if (!encounter || !actor) return ui.notifications.error("The requested check is no longer available.");
   const npc = encounter.npcs.find((entry) => entry.id === request.npcId) ?? encounter.npcs[0];
-  if (!npc) return ui.notifications.error("The requested influence target is no longer available.");
+  if (!npc) return ui.notifications.error("The requested target is no longer available.");
+  const actorName = participantDisplayName(encounter, actor);
+  const npcName = targetDisplayName(npc);
+  if (request.type === "research" && (npc.availability !== "available" || (npc.maximumPoints && npc.points >= npc.maximumPoints))) return ui.notifications.warn(`${npc.name} is not available for further research.`);
   request.npcId = npc.id;
   const list = request.type === "discovery" ? npc.discovery : npc.influence;
   let skill = request.skillId ? list.find((s) => s.id === request.skillId) : list.find((s) => s.slug === request.skillSlug);
@@ -1686,7 +2142,20 @@ async function adjudicate(request) {
     skill = { id: `attempt:${request.skillSlug}`, slug: request.skillSlug, label: request.skillLabel ?? request.skillSlug,
       dc: Number(secret?.dc ?? list[0]?.dc ?? 20), invalidDiscovery: true };
   }
-  if (!skill) return ui.notifications.error("The requested influence skill is no longer available.");
+  if (!skill) return ui.notifications.error("The requested skill is no longer available.");
+  encounter.activeActorId = actor.id;
+  encounter.activeNpcId = npc.id;
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+  tracker?.render(false);
+  renderCinematicHud();
+  renderInfluenceSidebar();
+  const requestAction = request.type === "research"
+    ? "Research"
+    : request.type === "discovery" ? "Discover information about" : "Influence";
+  await ChatMessage.create({
+    content: `<div class="influence-chat influence-check-request"><strong>Check Requested</strong><p>${esc(actorName)} is trying to ${requestAction} ${esc(npcName)} with ${esc(skill.label)}.</p></div>`
+  });
   const mods = [
     { id: "weakness", label: npc.weakness.label, value: npc.weakness.value, type: npc.weakness.type, mode: npc.weakness.mode ?? "roll", description: npc.weakness.description },
     { id: "strength", label: npc.strength.label, value: npc.strength.value, type: npc.strength.type, mode: npc.strength.mode ?? "roll", description: npc.strength.description },
@@ -1695,9 +2164,10 @@ async function adjudicate(request) {
   const customMods = [];
   const rows = mods.map((m) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${m.id}" ${m.id.startsWith("boon:") && m.activation === "automatic" ? "checked" : ""}> <strong>${esc(m.label)}</strong> ${signed(Number(m.value))} <small>${esc(m.description ?? "")}</small></label>`).join("");
   const invalidNotice = skill.invalidDiscovery ? `<p class="hint"><strong>GM:</strong> This is not a valid Discovery skill for this encounter. The blind roll consumes the character's action but cannot grant a Discovery.</p>` : "";
-  const content = `<form class="influence-adjudicate"><p><strong>${esc(actor.name)}</strong> influences <strong>${esc(npc.name)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></form>`;
+  const content = `<form class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></form>`;
+  const adjudicationContent = request.type === "research" ? content.replace(" influences ", " researches ") : content;
   new Dialog({
-    title: "Adjudicate Influence Check", content,
+    title: `Adjudicate ${request.type === "research" ? "Research" : "Influence"} Check`, content: adjudicationContent,
     render: (html) => {
       const renderCustomMods = () => html.find(".custom-modifiers").html(customMods.map((mod) => `<div class="custom-modifier"><span><strong>${esc(mod.label)}</strong> ${signed(mod.value)} (${esc(mod.type)})${mod.persist ? " — kept" : ""}</span><button type="button" data-remove-custom="${mod.id}" title="Remove modifier"><i class="fas fa-times"></i></button></div>`).join(""));
       html.find('[data-action="add-custom"]').on("click", () => {
@@ -1734,6 +2204,8 @@ async function adjudicate(request) {
 async function executeCheck(encounter, request, actor, skill, selected, dcAdjust) {
   const npc = encounter.npcs.find((entry) => entry.id === request.npcId) ?? encounter.npcs[0];
   if (!npc) return ui.notifications.error("The influence target is no longer available.");
+  const actorName = participantDisplayName(encounter, actor);
+  const npcName = targetDisplayName(npc);
   const statistic = skillStatistic(actor, skill.slug, skill.label);
   if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
   const effectiveDC = Number(skill.dc) + dcAdjust;
@@ -1745,29 +2217,53 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   }));
   const breakdown = selected.map((m) => `${esc(m.label)} ${signed(Number(m.value))}`).join(", ");
   const roll = await statistic.roll({
-    dc: { value: effectiveDC, visible: true, label: `${encounter.name} — ${npc.name}: ${skill.label}` },
+    // PF2e's public roll card may show the degree of success, but subsystem
+    // DCs and success margins remain GM information.
+    dc: { value: effectiveDC, visible: false, label: `${encounter.name} — ${npcName}: ${skill.label}` },
     modifiers: rollModifiers,
     extraRollOptions: [`influence:type:${request.type}`, `influence:encounter:${encounter.id}`],
-    label: `${request.type.titleCase()}: ${npc.name}`,
+    label: `${request.type.titleCase()}: ${npcName}`,
     messageMode: request.type === "discovery" ? "blind" : "public",
     createMessage: true
   });
   if (!roll) return;
   const degree = Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
   const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
-  const points = request.type === "influence" ? ([ -1, 0, 1, 2 ][degree] ?? 0) : 0;
-  const previousPoints = Number(npc.points);
-  snapshot(encounter, `${actor.name} → ${npc.name}: ${skill.label}`);
+  const points = request.type === "research"
+    ? Number(npc.awards?.[["criticalFailure", "failure", "success", "criticalSuccess"][degree]] ?? 0)
+    : request.type === "influence" ? ([ -1, 0, 1, 2 ][degree] ?? 0) : 0;
+  const previousPoints = request.type === "research" ? Number(encounter.researchPoints) : Number(npc.points);
+  const newlyReachedInfluenceThresholds = request.type === "influence"
+    ? npc.thresholds.filter((threshold) => threshold.points > previousPoints && threshold.points <= previousPoints + points)
+    : [];
+  snapshot(encounter, `${actorName} → ${npcName}: ${skill.label}`);
   encounter.checkLog ??= [];
-  const logEntry = { id: randomID(), actorId: actor.id, actorName: actor.name, npcId: npc.id, npcName: npc.name, type: request.type,
+  const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: npc.id, npcName, type: request.type,
     skillLabel: skill.label, outcome: skill.invalidDiscovery ? `${outcome} — Invalid Discovery Skill` : outcome,
     phase: encounter.currentPhase, timestamp: Date.now(), detailLabel: "", details: [] };
   encounter.checkLog.push(logEntry);
+  if (request.type === "discovery" && !skill.invalidDiscovery && degree >= 2) {
+    encounter.pendingDiscoveries ??= [];
+    encounter.pendingDiscoveries.push({ id: randomID(), logEntryId: logEntry.id, userId: request.requesterId, actorId: actor.id, npcId: npc.id, choices: degree === 3 ? 2 : 1 });
+  }
   if (request.type === "influence") npc.points = Math.max(0, npc.points + points);
+  const newlyLostInfluenceThresholds = request.type === "influence"
+    ? npc.thresholds.filter((threshold) => threshold.points <= previousPoints && threshold.points > npc.points)
+    : [];
+  if (request.type === "research") {
+    const room = npc.maximumPoints ? Math.max(0, npc.maximumPoints - npc.points) : Math.max(0, points);
+    const applied = points > 0 ? Math.min(points, room) : points;
+    npc.points = Math.max(0, npc.points + Math.max(0, applied));
+    encounter.researchPoints = Math.max(0, Number(encounter.researchPoints) + applied);
+    if (npc.maximumPoints && npc.points >= npc.maximumPoints) npc.availability = "exhausted";
+    logEntry.detailLabel = "Discoveries Gained";
+    logEntry.details = encounter.researchThresholds
+      .filter((threshold) => threshold.points > previousPoints && threshold.points <= encounter.researchPoints)
+      .flatMap((threshold) => [threshold.label, threshold.text, ...threshold.boons.map((boon) => boon.label)]).filter(Boolean);
+  }
   if (request.type === "influence") {
-    logEntry.detailLabel = "Boons Gained";
-    logEntry.details = npc.thresholds
-      .filter((threshold) => threshold.points > previousPoints && threshold.points <= npc.points)
+    logEntry.detailLabel = newlyLostInfluenceThresholds.length ? "Boons Lost" : "Boons Gained";
+    logEntry.details = (newlyLostInfluenceThresholds.length ? newlyLostInfluenceThresholds : newlyReachedInfluenceThresholds)
       .flatMap((threshold) => [threshold.label, ...threshold.boons.map((boon) => boon.label)]);
   }
   encounter.actorsActed[actor.id] = true;
@@ -1779,8 +2275,34 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   await Store.save(encounter);
   const resultText = request.type === "discovery"
     ? "Discovery checks do not award Influence Points."
-    : `${signed(points)} Influence Point${Math.abs(points) === 1 ? "" : "s"}`;
-  await ChatMessage.create({ content: `<div class="influence-chat"><strong>${esc(encounter.name)} — ${esc(npc.name)}</strong><p>${esc(actor.name)} used ${esc(skill.label)}.${breakdown ? ` Modifiers: ${breakdown}.` : ""}</p><p><strong>${resultText}</strong></p></div>`, whisper: request.type === "discovery" ? ChatMessage.getWhisperRecipients("GM").map((u) => u.id) : [] });
+    : request.type === "research"
+      ? `${signed(encounter.researchPoints - previousPoints)} Research Point${Math.abs(encounter.researchPoints - previousPoints) === 1 ? "" : "s"}`
+      : `${signed(points)} Influence Point${Math.abs(points) === 1 ? "" : "s"}`;
+  if (request.type !== "discovery") {
+    await ChatMessage.create({
+      content: `<div class="influence-chat influence-result"><strong>${esc(encounter.name)} — ${esc(npcName)}</strong><p>${esc(actorName)} used ${esc(skill.label)}.${breakdown ? ` Modifiers: ${breakdown}.` : ""}</p><p><strong>${resultText}</strong></p></div>`,
+      style: CONST.CHAT_MESSAGE_STYLES.OOC,
+      flags: { [MODULE_ID]: { messageKind: "result" } }
+    });
+  }
+  if (newlyReachedInfluenceThresholds.length) {
+    const rewards = influenceRewardSections(newlyReachedInfluenceThresholds);
+    await ChatMessage.create({
+      content: `<div class="influence-chat influence-result influence-reward"><strong>Reward Earned — ${esc(npcName)}</strong>${rewards}</div>`,
+      style: CONST.CHAT_MESSAGE_STYLES.OOC,
+      flags: { [MODULE_ID]: { messageKind: "result" } }
+    });
+  }
+  if (newlyLostInfluenceThresholds.length) {
+    await ChatMessage.create({
+      content: `<div class="influence-chat influence-result influence-reward-lost"><strong>Reward Lost — ${esc(npcName)}</strong><p>The party's Influence fell below a reward threshold.</p>${influenceRewardSections(newlyLostInfluenceThresholds)}</div>`,
+      style: CONST.CHAT_MESSAGE_STYLES.OOC,
+      flags: { [MODULE_ID]: { messageKind: "result" } }
+    });
+  }
+  if (request.type === "discovery" && (skill.invalidDiscovery || degree < 2)) {
+    await ChatMessage.create({ content: `<div class="influence-chat influence-discovery-failure"><strong>Discovery</strong><p>${esc(actorName)} failed to learn anything new about ${esc(npcName)}.</p></div>` });
+  }
   if (request.type === "discovery" && !skill.invalidDiscovery && degree >= 2) await offerDiscovery(encounter, request.requesterId, degree === 3 ? 2 : 1, logEntry.id, actor.id);
   tracker.render(false);
 }
@@ -1816,8 +2338,11 @@ async function resolveDiscovery(encounterId, userId, selections, logEntryId) {
   const encounter = Store.get(encounterId);
   if (!encounter) return;
   const logEntry = encounter.checkLog?.find((entry) => entry.id === logEntryId);
+  const pending = encounter.pendingDiscoveries?.find((entry) => entry.logEntryId === logEntryId && entry.userId === userId);
+  if (!pending) return;
   const npc = encounter.npcs.find((entry) => entry.id === logEntry?.npcId) ?? encounter.npcs[0];
   if (!npc) return;
+  const npcName = targetDisplayName(npc);
   const secret = npc.discovery.find((s) => s.secret);
   const nonLore = npc.influence.filter((s) => !s.lore);
   const low = nonLore.toSorted((a, b) => a.dc - b.dc)[0];
@@ -1839,15 +2364,35 @@ async function resolveDiscovery(encounterId, userId, selections, logEntryId) {
       const askedSkill = game.actors.get(encounter.checkLog?.find((entry) => entry.id === logEntryId)?.actorId)?.skills?.[named];
       const askedLabel = askedSkill ? game.i18n.localize(askedSkill.label) : named;
       const found = npc.influence.find((s) => s.slug === named);
-      fact = found ? `${found.label} can influence ${npc.name}.` : `${askedLabel} is not among ${npc.name}'s listed Influence skills.`;
+      fact = found ? `${found.label} can influence ${npcName}.` : `${askedLabel} is not among ${npcName}'s listed Influence skills.`;
     }
     discoveryRecord.facts.push(fact);
     learned.push(fact);
-    await ChatMessage.create({ content: `<div class="influence-chat"><strong>Discovery: ${esc(npc.name)}</strong><p>${esc(fact)}</p></div>`, whisper: [userId, ...ChatMessage.getWhisperRecipients("GM").map((u) => u.id)] });
+    await ChatMessage.create({
+      content: `<div class="influence-chat influence-discovery-reveal"><strong>Discovery: ${esc(npcName)}</strong><p>${esc(fact)}</p></div>`,
+      whisper: [userId, ...ChatMessage.getWhisperRecipients("GM").map((u) => u.id)],
+      flags: { [MODULE_ID]: { messageKind: "discovery-reveal" } }
+    });
   }
-  if (logEntry && learned.length) Object.assign(logEntry, { detailLabel: "Learned", details: learned });
+  if (!learned.length) return;
+  if (logEntry) Object.assign(logEntry, { detailLabel: "Learned", details: [...(logEntry.details ?? []), ...learned] });
+  if (pending) {
+    pending.choices = Math.max(0, Number(pending.choices) - learned.length);
+    if (!pending.choices) encounter.pendingDiscoveries = encounter.pendingDiscoveries.filter((entry) => entry.id !== pending.id);
+  }
   await Store.save(encounter);
   game.socket.emit(SOCKET, { action: "refresh", userId });
+  tracker?.render(false);
+}
+
+async function resumePendingDiscoveries() {
+  if (game.user.isGM) return;
+  const encounter = Store.get();
+  const pending = (encounter?.pendingDiscoveries ?? []).filter((entry) => entry.userId === game.user.id);
+  for (const entry of pending) {
+    const selections = await collectDiscoveryChoices(entry.choices, entry.actorId);
+    if (selections.length) game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: encounter.id, userId: game.user.id, selections, logEntryId: entry.logEntryId });
+  }
 }
 
 function promptNumber(title, value) { return new Promise((resolve) => new Dialog({ title, content: `<input type="number" name="value" value="${value}">`, buttons: { ok: { label: "Apply", callback: (h) => resolve(Number(h.find('[name="value"]').val())) }, cancel: { label: "Cancel", callback: () => resolve(null) } }, close: () => resolve(null) }).render(true)); }
@@ -1870,6 +2415,7 @@ Hooks.once("ready", async () => {
     if (payload.action === "check-request" && game.user.isGM && game.users.activeGM?.id === game.user.id) adjudicate(payload);
     if (payload.action === "discovery-offer" && payload.userId === game.user.id) collectDiscoveryChoices(payload.choices, payload.actorId).then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
     if (payload.action === "discovery-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveDiscovery(payload.encounterId, payload.userId, payload.selections, payload.logEntryId);
+    if (payload.action === "progress-clock-refresh") progressClockDatabase()?.refresh?.();
     if (payload.action === "refresh" && (!payload.userId || payload.userId === game.user.id)) {
       tracker?.render(false);
       renderCinematicHud();
@@ -1878,9 +2424,20 @@ Hooks.once("ready", async () => {
   });
   game[MODULE_ID] = { open: () => tracker.render(true), manage: () => new EncounterManager().render(true), Store };
   setTimeout(() => { renderInfluenceSidebar(); renderCinematicHud(); }, 250);
+  setTimeout(() => resumePendingDiscoveries(), 500);
 });
 
 Hooks.on("renderSidebar", () => renderInfluenceSidebar());
+function markInfluenceChatMessage(message, html) {
+  let kind = message.getFlag(MODULE_ID, "messageKind");
+  if (!kind && message.whisper?.length && /<strong>Discovery:/i.test(message.content ?? "")) kind = "discovery-reveal";
+  if (!kind && /influence-result/.test(message.content ?? "")) kind = "result";
+  if (!kind) return;
+  const element = html instanceof HTMLElement ? html : html?.[0];
+  element?.classList.add(`influence-${kind}-message`);
+}
+Hooks.on("renderChatMessage", markInfluenceChatMessage);
+Hooks.on("renderChatMessageHTML", markInfluenceChatMessage);
 Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); });
 
 Hooks.on("renderSceneControls", (_app, html) => {

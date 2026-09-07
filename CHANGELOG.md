@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.3.0 — 2026-09-07
+
+- Critical-failure IP losses that drop a target below a threshold now post a separate public Reward Lost card after the negative Influence Point notice.
+- Fixed existing Global Progress Clock labels failing to repaint on player clients after an encounter nickname was changed.
+- Added encounter-specific PC and target nicknames for compact display in the tracker, sidebar, cinematic portraits, chat cards, logs, and published summaries without changing linked Actor names.
+- Shortened Influence progress-clock labels to each target's nickname or name instead of prefixing every clock with the encounter name.
+- Extended optional Global Progress Clocks support to Influence encounters, with one public IP clock per target that remains visible while the encounter is active or paused and is cleaned up when its target or encounter is removed.
+- Influence threshold rewards now receive their own public Reward Earned chat card, separate from the Influence Point result notice and limited to player-visible reward details.
+- Concealed subsystem check DCs and success margins on player-facing PF2e roll cards while retaining public Influence rolls and their degree of success.
+- Restored GM and player encounter-sidebar interaction by explicitly enabling pointer events on the custom Foundry sidebar panel.
+- Fixed the Chat sidebar disappearing on the first switch away from the Influence sidebar by preserving Foundry's required sidebar-content classes.
+- Fixed the same first-switch failure by allowing Foundry's tab handler to run before the Influence sidebar cleanup.
+- Private Discovery revelation cards now have distinct blue module styling and omit the redundant visible recipient line while remaining privately delivered.
+- Result notices now use Foundry's normal OOC message style plus a durable outer-message marker and high-contrast green treatment.
+- Influence and Research result cards now use distinct result styling and carry no unnecessary recipient metadata; the redundant GM-only Discovery summary card was removed.
+- GM point adjustments now refresh player clients immediately.
+- Successful Discovery choices are persisted until resolved, restored after player reconnects, and can be completed manually by the GM from the check log.
+- Failed Discovery checks now post a public chat card stating that the acting PC learned nothing new about the target.
+- Committing a check request now updates the shared cinematic portraits to its PC and target and posts a public chat acknowledgment naming the requested action and skill.
+- Existing Influence targets can now be linked or relinked by dropping an Actor or Token onto their cards; this updates identity and art while preserving encounter mechanics, with an option to unlink later.
+- New Research encounters begin with First through Fourth Discovery at 2, 4, 6, and 8 RP.
+- Saving now refreshes the open editor so updated Discovery threshold names and RP values appear immediately.
+- Selecting a Lore skill now automatically checks its Lore checkbox.
+- Fixed Research sources disappearing from the Skills tab after saving source details.
+- Research editors now omit the inapplicable Weakness & Strength tab and label their results tab Discoveries.
+- Removed the generated placeholder NPC from new multi-NPC encounters; their first target must now be added explicitly through drag-and-drop or Add Influence Target.
+- Added the Research subsystem with shared Research Points, timed research intervals, multiple independently capped/hidden/exhausted sources, source-specific skill DCs and degree-of-success awards, and encounter-wide discovery thresholds.
+- Added Actor, Item, Journal, and Journal-page drag-and-drop for Research sources, plus source-text parsing and manual source/threshold editing.
+- Added the complete `Researching the Eighth` sample encounter, including its eight sources, 24 RP discovery ladder, source requirements, and special critical-failure penalty.
+- Fixed hidden Research sources remaining visible in the GM-facing active tracker after editing and resuming an encounter; selection now falls back to a visible source.
+- Added optional Global Progress Clocks integration for Research encounters. An enabled shared-RP tracker stays visible while active or paused, updates with Research progress, and is removed when completed, deleted, or switched off.
+- Added PF2e level-based automatic skill DCs. New and otherwise untouched checks follow the encounter level, Lore defaults to the Easy adjustment, and manually edited DCs are preserved.
+- Expanded the skill picker with common Lore skills plus searchable specialization dialogs for deity, creature, organization, settlement, terrain, and food or drink Lore.
+
 ## 0.2.0 — 2026-09-03
 
 - Added saved pause/resume support. GMs can pause or resume encounters from the tracker, manager, or Influence sidebar context menu; paused encounters hide the cinematic presentation, prevent new checks, preserve all progress, and mark their Journal record and UI entries as `(Paused)`.
