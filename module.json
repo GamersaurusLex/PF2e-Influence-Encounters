@@ -1,12 +1,12 @@
 {
   "id": "influence-encounters",
   "title": "Influence Encounters for PF2e",
-  "description": "Run structured PF2e Influence and Research encounters with secret discoveries, GM-adjudicated modifiers, threshold rewards, progress tracking, history, and undo.",
-  "version": "0.3.0",
+  "description": "Run structured PF2e Influence, Research, and Chase encounters with GM-adjudicated checks, point tracking, threshold rewards, history, and undo.",
+  "version": "0.4.0",
   "authors": [{ "name": "Gamersaurus Lex" }],
   "url": "https://github.com/GamersaurusLex/PF2e-Influence-Encounters",
   "manifest": "https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/latest/download/module.json",
-  "download": "https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/download/v0.3.0/influence-encounters.zip",
+  "download": "https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/download/v0.4.0/influence-encounters.zip",
   "socket": true,
   "compatibility": { "minimum": "14.365", "verified": "14.367", "maximum": "14" },
   "relationships": {

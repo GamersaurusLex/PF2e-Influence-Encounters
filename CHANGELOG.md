@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 — 2026-09-08
+
+- Added the Chase Down catch victory condition and public “You caught…” notification. Chase victories can now show a full-screen, image-backed splash with customizable headline, either automatically or from a GM-only trigger in the tracker.
+- Added an optional Chase setting that obscures future obstacles from players. Players see completed and active obstacles only, receive relative quarry/pursuer position text instead of an exact location, and get non-spoiling movement updates in chat.
+- Changed the active encounter tracker's Manage button to Edit Encounter; it now opens the active encounter directly in its editor instead of opening the full encounter manager.
+- Added explicit Chase Subject pace, starting obstacle, and Before/After Party turn-order controls. The active tracker marks the subject's current obstacle and announces each subject movement in chat when the GM advances the round.
+- Players who own multiple participating PCs can now select any eligible PC directly from the encounter sidebar. After a check, the client automatically selects the next owned PC who has not acted instead of remaining stuck on the character who just acted.
+- Changed Duplicate to create a clean new draft. Chase copies now select obstacle 1, reset runtime progress and logs, and preserve all configured obstacles, subject data, artwork, checks, and circumstances.
+- Fixed newly activated Chases opening on the most recently added or edited obstacle; draft Chases now begin at their first incomplete obstacle, and adding later obstacles no longer changes the runtime position.
+- Fixed dropping an Actor onto the persistent Chase Subject also propagating into an obstacle drop handler and overwriting the first obstacle's name and image.
+- Added a persistent Chase Subject with role, name, nickname, Actor drag-and-drop linking, and file-picked artwork, plus an overall chase description and cinematic background. Chase presentations now show the acting PC, current obstacle image, and persistent subject in a three-panel composition.
+- Added a Chase Circumstances tab for reusable global or obstacle-specific bonuses, penalties, and DC adjustments. Configured circumstances appear as optional checkboxes when the GM adjudicates a matching Overcome check and can be limited to particular statistics.
+- Added Fortitude, Reflex, and Will saves to the Chase Overcome picker with their correct PF2e statistic slugs; Lore Overcome checks continue to default to the level-based Easy DC (standard DC minus 2).
+- Added the first Chase subsystem prototype with ordered obstacles, per-obstacle Chase Points, PF2e degree-of-success awards, no CP carryover, round/action tracking, pass/unable penalties, manual CP controls, pause/resume, undo, and automatic obstacle transitions.
+- Added configuration fields for Chase Down, Run Away, Beat the Clock, Competitive, and Custom chase designs, plus deterministic opponent pacing, configurable round limits and outcomes, and exact/relative/hidden Overcome DC presentation.
+- Added the five-obstacle `Where Is the Governor?` Season of Ghosts sample chase with all published Overcome checks, DCs, descriptions, and situational modifiers.
+- Added Chase-aware player and GM tracker, sidebar, chat results, check log, victory/failure notices, and Journal publication.
+
 ## 0.3.0 — 2026-09-07
 
 - Critical-failure IP losses that drop a target below a threshold now post a separate public Reward Lost card after the negative Influence Point notice.
