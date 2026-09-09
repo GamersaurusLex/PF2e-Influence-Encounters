@@ -128,13 +128,17 @@ function parseInfluenceSource(source, npc) {
 function parseResearchSource(source, npc) {
   const text = String(source).replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
   const found = [];
-  const max = text.match(/\bMaximum\s+(?:Research\s+)?Points?\s*(\d+)/i);
+  const maximumLabel = String.raw`(?:Research\s+Points?|RP)`;
+  const perActor = text.match(new RegExp(`\\bMaximum\\s+${maximumLabel}\\s+per\\s+(?:PC|character)\\s*[:—-]?\\s*(\\d+)`, "i"))
+    ?? text.match(new RegExp(`\\bMaximum\\s+${maximumLabel}\\s*[:—-]?\\s*\\d+[^.;]*?\\b(\\d+)\\s*(?:RP\\s*)?per\\s+(?:PC|character)`, "i"));
+  if (perActor) { npc.maximumPointsPerActor = Number(perActor[1]); found.push("maximum RP per PC"); }
+  const max = text.match(new RegExp(`\\bMaximum\\s+${maximumLabel}\\s*[:—-]?\\s*(\\d+)`, "i"));
   if (max) { npc.maximumPoints = Number(max[1]); found.push("maximum RP"); }
-  const checks = sectionText(text, /\b(?:Research\s+Checks?|Checks?)\s*/i, /\b(?:Maximum\s+(?:Research\s+)?Points?|Requirements?|Description|Background)\b/i);
+  const checks = sectionText(text, /\b(?:Research\s+Checks?|Checks?)\s*/i, /\b(?:Maximum\s+(?:(?:Research\s+)?Points?|RP)|Requirements?|Description|Background)\b/i);
   if (checks !== null) { npc.influence = parseDcSkills(checks, "research"); found.push(`${npc.influence.length} Research check(s)`); }
-  const requirements = sectionText(text, /\bRequirements?\s*/i, /\b(?:Maximum\s+(?:Research\s+)?Points?|Research\s+Checks?|Checks?|Description|Background)\b/i);
+  const requirements = sectionText(text, /\bRequirements?\s*/i, /\b(?:Maximum\s+(?:(?:Research\s+)?Points?|RP)|Research\s+Checks?|Checks?|Description|Background)\b/i);
   if (requirements !== null) { npc.requirements = requirements; found.push("requirements"); }
-  const description = sectionText(text, /\b(?:Description|Background)\s*/i, /\b(?:Maximum\s+(?:Research\s+)?Points?|Research\s+Checks?|Checks?|Requirements?)\b/i);
+  const description = sectionText(text, /\b(?:Description|Background)\s*/i, /\b(?:Maximum\s+(?:(?:Research\s+)?Points?|RP)|Research\s+Checks?|Checks?|Requirements?)\b/i);
   if (description !== null) { npc.background = description; found.push("description"); }
   return found;
 }
@@ -227,6 +231,7 @@ function normalizeEncounterCollections(encounter) {
   });
   encounter.checkLog = indexedArray(encounter.checkLog);
   encounter.pendingDiscoveries = indexedArray(encounter.pendingDiscoveries);
+  encounter.pendingChecks = indexedArray(encounter.pendingChecks);
   encounter.npcs = indexedArray(encounter.npcs);
   // Preserve the legacy single-NPC fallback, but let new multi-NPC drafts begin
   // empty so their first target must be deliberately added or dropped.
@@ -245,6 +250,15 @@ function normalizeEncounterCollections(encounter) {
     npc.personality ??= "";
     npc.points = Number(npc.points ?? encounter.points) || 0;
     npc.maximumPoints = Math.max(0, Number(npc.maximumPoints) || 0);
+    npc.maximumPointsPerActor = Math.max(0, Number(npc.maximumPointsPerActor) || 0);
+    npc.researchByActor = npc.researchByActor && typeof npc.researchByActor === "object" ? npc.researchByActor : {};
+    for (const [actorId, rawRecord] of Object.entries(npc.researchByActor)) {
+      const record = rawRecord && typeof rawRecord === "object" ? rawRecord : {};
+      record.points = Math.max(0, Number(record.points) || 0);
+      record.availability = ["available", "unavailable", "exhausted"].includes(record.availability) ? record.availability : "available";
+      if (record.availability !== "unavailable") record.availability = npc.maximumPointsPerActor && record.points >= npc.maximumPointsPerActor ? "exhausted" : "available";
+      npc.researchByActor[actorId] = record;
+    }
     npc.availability = ["hidden", "available", "exhausted"].includes(npc.availability) ? npc.availability : "available";
     npc.requirements ??= "";
     npc.researchInterval ??= "";
@@ -358,6 +372,7 @@ const DEFAULT_ENCOUNTER = {
   activeEffects: [],
   checkLog: [],
   pendingDiscoveries: [],
+  pendingChecks: [],
   history: []
 };
 
@@ -690,6 +705,19 @@ function targetDisplayName(npc) {
   return String(npc?.nickname ?? "").trim() || npc?.name || "Target";
 }
 
+function researchActorState(source, actorId) {
+  const record = source?.researchByActor?.[actorId] ?? { points: 0, availability: "available" };
+  const points = Math.max(0, Number(record.points) || 0);
+  const maximum = Math.max(0, Number(source?.maximumPointsPerActor) || 0);
+  const availability = record.availability === "unavailable" ? "unavailable" : maximum && points >= maximum ? "exhausted" : "available";
+  return { points, maximum, availability, available: availability === "available" };
+}
+
+function researchSourceAvailableForActor(source, actorId) {
+  if (!source || source.availability !== "available" || (source.maximumPoints && source.points >= source.maximumPoints)) return false;
+  return researchActorState(source, actorId).available;
+}
+
 function chaseVictoryMessage(encounter) {
   const role = String(encounter?.chaseSubject?.label ?? "").trim();
   const isQuarry = encounter?.chaseType === "chase-down" || /quarry/i.test(role);
@@ -980,7 +1008,9 @@ class InfluenceTracker extends Application {
     const obscureChaseCourse = isChase && encounter.obscureFutureObstacles && !game.user.isGM;
     const visibleNpcs = (encounter?.npcs ?? []).filter((npc, index) => npc.availability !== "hidden" && (!obscureChaseCourse || index <= activeObstacleIndex));
     const activeNpcRecord = visibleNpcs.find((npc) => npc.id === selection.npcId) ?? visibleNpcs[0] ?? null;
-    const activeNpc = activeNpcRecord ? { ...activeNpcRecord, name: targetDisplayName(activeNpcRecord) } : null;
+    const selectedResearchActor = isResearch ? participants.find((actor) => actor.id === selection.actorId) : null;
+    const activeResearchState = isResearch && activeNpcRecord && selection.actorId ? researchActorState(activeNpcRecord, selection.actorId) : null;
+    const activeNpc = activeNpcRecord ? { ...activeNpcRecord, name: targetDisplayName(activeNpcRecord), researchActorState: activeResearchState } : null;
     const thresholdSource = isResearch ? (encounter?.researchThresholds ?? []) : isChase ? [] : (activeNpcRecord?.thresholds ?? []);
     const currentPoints = isResearch ? Number(encounter?.researchPoints) : Number(activeNpcRecord?.points);
     const thresholds = thresholdSource.map((threshold) => ({
@@ -999,6 +1029,7 @@ class InfluenceTracker extends Application {
         : entry.outcome
     }));
     const npcs = visibleNpcs.map((npc) => ({ ...npc, name: targetDisplayName(npc), active: npc.id === activeNpc?.id,
+      researchActorState: isResearch && selection.actorId ? researchActorState(npc, selection.actorId) : null,
       subjectHere: isChase && !obscureChaseCourse && encounter.npcs.indexOf(npc) === encounter.opponentPosition, showPoints: game.user.isGM || encounter.publicPoints }));
     const subjectRole = String(encounter?.chaseSubject?.label || "Subject").trim();
     const subjectIsPursuer = encounter?.chaseType === "run-away" || /pursuer/i.test(subjectRole);
@@ -1013,10 +1044,19 @@ class InfluenceTracker extends Application {
       }
       return { ...skill, dcText };
     }) : [];
-    const sourceAvailable = isChase ? activeNpc?.availability !== "exhausted" : !isResearch || (activeNpc?.availability === "available" && (!activeNpc.maximumPoints || activeNpc.points < activeNpc.maximumPoints));
+    const sourceAvailable = isChase ? activeNpc?.availability !== "exhausted" : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
     return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, isResearch, isChase, obscureChaseCourse, chaseSubjectStatus,
+      researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
       pointLabel: isResearch ? "RP" : isChase ? "CP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : "Influence Targets",
-      actionLabel: isResearch ? "Research" : isChase ? "Attempt Obstacle" : "Influence", currentPoints,
+      actionLabel: isResearch ? "Research" : isChase ? "Roll to Overcome" : "Influence", currentPoints,
+      pendingChecks: game.user.isGM ? (encounter?.pendingChecks ?? []).map((request, index) => {
+        const queuedActor = game.actors.get(request.actorId);
+        const queuedNpc = encounter.npcs.find((npc) => npc.id === request.npcId);
+        const skillList = request.type === "discovery" ? queuedNpc?.discovery : queuedNpc?.influence;
+        const queuedSkill = skillList?.find((skill) => skill.id === request.skillId || skill.slug === request.skillSlug);
+        return { ...request, position: index + 1, actorName: queuedActor ? participantDisplayName(encounter, queuedActor) : "Missing PC",
+          npcName: queuedNpc ? targetDisplayName(queuedNpc) : "Missing target", skillLabel: queuedSkill?.label ?? request.skillLabel ?? "Missing skill" };
+      }) : [],
       isGM: game.user.isGM, showPoints: game.user.isGM || encounter?.publicPoints, noEncounter: !encounter, isPaused: encounter?.status === "paused",
       canAct: !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !!selection.actorId && sourceAvailable,
       canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused",
@@ -1070,6 +1110,11 @@ class InfluenceTracker extends Application {
       return requestCheck(encounter, event.currentTarget.dataset.type, selection.actorId, selection.npcId);
     }
     if (!game.user.isGM) return ui.notifications.warn(game.i18n.localize("INFLUENCE.GMOnly"));
+    if (action === "adjudicate-request") {
+      const request = encounter.pendingChecks.find((entry) => entry.id === event.currentTarget.dataset.id);
+      return request ? adjudicate(request) : ui.notifications.warn("That queued check is no longer available.");
+    }
+    if (action === "cancel-request") return cancelPendingCheck(encounter.id, event.currentTarget.dataset.id, "The GM canceled this check request.");
     if (action === "pause") return pauseEncounter(encounter.id);
     if (action === "resume") return resumeEncounter(encounter.id);
     if (action === "victory-splash") return triggerVictorySplash(encounter);
@@ -1303,12 +1348,16 @@ function renderInfluenceSidebar() {
     const visibleSources = encounter.npcs.filter((npc, index) => npc.availability !== "hidden" && (!obscureChaseCourse || index <= activeObstacleIndex));
     const npcRows = visibleSources.map((npc) => {
       const subjectMarker = chase && !obscureChaseCourse && encounter.npcs.indexOf(npc) === encounter.opponentPosition ? ` <small><i class="fa-solid fa-location-dot"></i> ${esc(encounter.chaseSubject?.label || "Subject")}</small>` : "";
-      return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-influence-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${subjectMarker}${research ? ` <small>${npc.points}${npc.maximumPoints ? `/${npc.maximumPoints}` : ""} RP</small>` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
+      const actorState = research && selection.actorId ? researchActorState(npc, selection.actorId) : null;
+      const actorStatus = actorState ? ` <small>Your PC: ${encounter.publicPoints ? `${actorState.points}${actorState.maximum ? `/${actorState.maximum}` : ""} RP · ` : ""}${esc(actorState.availability)}</small>` : "";
+      const sourceStatus = encounter.publicPoints ? ` <small>${npc.points}${npc.maximumPoints ? `/${npc.maximumPoints}` : ""} RP</small>` : "";
+      return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-influence-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${subjectMarker}${research ? `${sourceStatus}${actorStatus}` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
     }).join("");
     const activeNpc = visibleSources.find((npc) => npc.id === selection.npcId) ?? visibleSources[0];
     const points = research ? encounter.researchPoints : activeNpc?.points ?? 0;
     const pointLabel = research ? "RP" : chase ? "CP" : "IP";
-    const actions = research ? '<button data-influence-action="research"><i class="fa-solid fa-book-open"></i> Research</button>' : chase ? '<button data-influence-action="chase"><i class="fa-solid fa-person-running"></i> Attempt Obstacle</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
+    const researchDisabled = research && !researchSourceAvailableForActor(activeNpc, selection.actorId) ? " disabled" : "";
+    const actions = research ? `<button data-influence-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-influence-action="chase"><i class="fa-solid fa-person-running"></i> Roll to Overcome</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
     const chaseStatus = obscureChaseCourse ? `<p class="chase-relative-status">The ${esc(encounter.chaseSubject?.label || "Subject")} is ${encounter.chaseType === "run-away" || /pursuer/i.test(encounter.chaseSubject?.label || "") ? "behind you" : "ahead of you"}.</p>` : "";
     panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : chase ? `Round ${encounter.currentRound}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : ""} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" ? actions : ""}</div></div>`;
   }
@@ -1718,14 +1767,15 @@ async function duplicateEncounter(id) {
   while (names.has(name.toLowerCase())) name = `${source.name} (Copy ${copyNumber++})`;
   const duplicate = deepClone(source);
   Object.assign(duplicate, {
-    id: randomID(), name, status: "draft", currentPhase: 1, currentRound: 1, chaseOutcome: "", points: 0,
+    id: randomID(), name, status: "draft", currentPhase: 1, currentRound: 1, chaseOutcome: "", points: 0, researchPoints: 0,
     opponentPosition: source.subsystemType === "chase" ? source.subjectStartPosition : source.opponentPosition,
     activeActorId: "", actorsActed: {}, phaseActions: {}, discoveries: {},
-    activeEffects: source.subsystemType === "chase" ? deepClone(source.activeEffects) : [], checkLog: [], pendingDiscoveries: [], history: [], journalId: "", endedAt: null,
+    activeEffects: source.subsystemType === "chase" ? deepClone(source.activeEffects) : [], checkLog: [], pendingDiscoveries: [], pendingChecks: [], history: [], journalId: "", endedAt: null,
     presentationVisible: true
   });
   duplicate.npcs.forEach((npc) => {
     npc.points = 0;
+    npc.researchByActor = {};
     npc.progressClockId = "";
     npc.thresholds.forEach((threshold) => threshold.boons.forEach((boon) => {
       boon.remaining = boon.uses;
@@ -1981,6 +2031,13 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       id: actor.id, name: actor.name, nickname: this.encounter.participantNicknames?.[actor.id] ?? "",
       image: participantPortrait(actor), selected: selected.has(actor.id)
     }));
+    const encounterView = deepClone(this.encounter);
+    if (isResearch) encounterView.npcs.forEach((source) => {
+      source.researchParticipantRows = characterActors.filter((actor) => actor.selected).map((actor) => {
+        const state = researchActorState(source, actor.id);
+        return { ...actor, ...state };
+      });
+    });
     const tabs = this._prepareTabs("primary");
     if (isResearch) {
       delete tabs.traits;
@@ -1994,7 +2051,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     }
     return {
       ...context,
-      encounter: this.encounter,
+      encounter: encounterView,
       isResearch,
       isChase,
       progressClockAvailable: !!progressClockDatabase(),
@@ -2009,6 +2066,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       rewardKinds: { modifier: "Mechanical modifier", ip: "IP adjustment", narrative: "Narrative reward" },
       rewardActivations: { automatic: "Automatic", manual: "GM applies" },
       availabilityOptions: { hidden: "Hidden", available: "Available", exhausted: "Exhausted" },
+      researchActorAvailabilityOptions: { available: "Available", unavailable: "Unavailable", exhausted: "Exhausted" },
       intervalUnits: { minute: "Minutes", hour: "Hours", day: "Days" },
       chaseTypes: { "chase-down": "Chase Down", "run-away": "Run Away", "beat-clock": "Beat the Clock", competitive: "Competitive", custom: "Custom" },
       subjectTurnOrders: { before: "Before the party", after: "After the party" },
@@ -2049,6 +2107,17 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this.element.querySelector('[name="level"]')?.addEventListener("input", () => {
       this.element.querySelectorAll(".skill-row").forEach(refreshAutomaticDc);
     });
+    this.element.querySelectorAll("[data-research-actor-points]").forEach((input) => input.addEventListener("input", () => {
+      const previous = Math.max(0, Number(input.dataset.previousValue) || 0);
+      const current = Math.max(0, Number(input.value) || 0);
+      const delta = current - previous;
+      input.dataset.previousValue = String(current);
+      if (!delta) return;
+      const sourcePoints = this.element.querySelector(`[name="npcs.${input.dataset.sourceIndex}.points"]`);
+      const encounterPoints = this.element.querySelector('[name="researchPoints"]');
+      if (sourcePoints) sourcePoints.value = String(Math.max(0, Number(sourcePoints.value) + delta));
+      if (encounterPoints) encounterPoints.value = String(Math.max(0, Number(encounterPoints.value) + delta));
+    }));
     this.element.querySelector('[name="chaseType"]')?.addEventListener("change", (event) => {
       const order = this.element.querySelector('[name="subjectTurnOrder"]');
       if (order) order.value = event.currentTarget.value === "run-away" ? "after" : "before";
@@ -2378,6 +2447,10 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
   const npcName = targetDisplayName(npc);
   if (!encounterParticipants(encounter).some((participant) => participant.id === actor.id)) return ui.notifications.warn(`${actor.name} is not participating in this encounter.`);
   if (!game.user.isGM && !canUserControlActor(actor)) return ui.notifications.warn(`You must be an Owner of ${actor.name} to act for that character.`);
+  if (isResearch && !researchSourceAvailableForActor(npc, actor.id)) {
+    const state = researchActorState(npc, actor.id);
+    return ui.notifications.warn(state.availability === "unavailable" ? `${npcName} is unavailable to ${actor.name}.` : `${actor.name} has exhausted the Research Points available from ${npcName}.`);
+  }
   if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this ${isResearch ? "research interval" : isChase ? "round" : "phase"}.`);
   let options = "";
   if (type === "discovery") {
@@ -2402,7 +2475,7 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
       const actorChoice = source === "actor" ? actorSkillChoices(actor).find((skill) => skill.slug === value) : null;
       const payload = { action: "check-request", encounterId: encounter.id, npcId: npc.id, requesterId: game.user.id, actorId: actor.id, type,
         skillId: source === "configured" ? value : null, skillSlug: actorChoice?.slug ?? null, skillLabel: actorChoice?.label ?? null };
-      if (game.user.isGM) adjudicate(payload); else game.socket.emit(SOCKET, payload);
+      if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
     } } }
   }).render(true);
 }
@@ -2422,16 +2495,77 @@ function applicableBoons(encounter, request, skill) {
   });
 }
 
-async function adjudicate(request) {
-  if (!game.user.isGM) return;
-  const encounter = Store.get(request.encounterId);
-  const actor = game.actors.get(request.actorId);
-  if (!encounter || !actor) return ui.notifications.error("The requested check is no longer available.");
-  const npc = encounter.npcs.find((entry) => entry.id === request.npcId) ?? encounter.npcs[0];
-  if (!npc) return ui.notifications.error("The requested target is no longer available.");
+let adjudicationOpen = false;
+let checkQueueOperation = Promise.resolve();
+
+function receiveCheckRequest(payload) {
+  checkQueueOperation = checkQueueOperation.then(() => enqueueCheckRequest(payload)).catch((error) => console.error(`${MODULE_ID} | Check queue operation failed`, error));
+  return checkQueueOperation;
+}
+
+async function notifyPendingCheck(request, message) {
+  const recipients = [...new Set([request.requesterId, ...ChatMessage.getWhisperRecipients("GM").map((user) => user.id)].filter(Boolean))];
+  await ChatMessage.create({
+    content: `<div class="influence-chat influence-check-canceled"><strong>Check Request Canceled</strong><p>${esc(message)}</p></div>`,
+    whisper: recipients
+  });
+  game.socket.emit(SOCKET, { action: "check-request-status", userId: request.requesterId, message });
+}
+
+async function cancelPendingCheck(encounterId, requestId, reason) {
+  const encounter = Store.get(encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
+  if (!encounter || !request) return;
+  encounter.pendingChecks = encounter.pendingChecks.filter((entry) => entry.id !== requestId);
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+  await notifyPendingCheck(request, reason);
+  tracker?.render(false);
+}
+
+async function enqueueCheckRequest(payload) {
+  if (!game.user.isGM || game.users.activeGM?.id !== game.user.id) return;
+  const encounter = Store.get(payload.encounterId);
+  const actor = game.actors.get(payload.actorId);
+  const npc = encounter?.npcs?.find((entry) => entry.id === payload.npcId);
+  if (!encounter || encounter.status !== "active" || !actor || !npc) return ui.notifications.warn("That check request is no longer valid.");
+  if (encounter.pendingChecks.some((entry) => entry.actorId === payload.actorId)) {
+    game.socket.emit(SOCKET, { action: "check-request-status", userId: payload.requesterId, message: `${participantDisplayName(encounter, actor)} already has a check waiting for the GM.` });
+    return;
+  }
+  const request = { ...payload, id: payload.id || randomID(), submittedAt: Date.now() };
+  encounter.pendingChecks.push(request);
+  await Store.save(encounter);
+  const skillList = request.type === "discovery" ? npc.discovery : npc.influence;
+  const skill = skillList.find((entry) => entry.id === request.skillId || entry.slug === request.skillSlug);
   const actorName = participantDisplayName(encounter, actor);
   const npcName = targetDisplayName(npc);
-  if (request.type === "research" && (npc.availability !== "available" || (npc.maximumPoints && npc.points >= npc.maximumPoints))) return ui.notifications.warn(`${npc.name} is not available for further research.`);
+  await ChatMessage.create({ content: `<div class="influence-chat influence-check-request"><strong>Check Requested</strong><p>${esc(actorName)} requested a check against ${esc(npcName)} using ${esc(skill?.label ?? request.skillLabel ?? "an unknown skill")}.</p></div>` });
+  game.socket.emit(SOCKET, { action: "check-request-status", userId: request.requesterId, message: `${actorName}'s check request is queued for the GM.` });
+  game.socket.emit(SOCKET, { action: "refresh" });
+  tracker?.render(false);
+  if (!adjudicationOpen) adjudicate(request);
+}
+
+async function adjudicate(request) {
+  if (!game.user.isGM) return;
+  if (adjudicationOpen) return ui.notifications.info("Finish the current adjudication before opening another request.");
+  const encounter = Store.get(request.encounterId);
+  const actor = game.actors.get(request.actorId);
+  if (!encounter || !encounter.pendingChecks.some((entry) => entry.id === request.id)) return ui.notifications.error("The requested check is no longer available.");
+  if (!actor) return cancelPendingCheck(encounter.id, request.id, "The acting PC is no longer available.");
+  const npc = encounter.npcs.find((entry) => entry.id === request.npcId);
+  if (!npc) return cancelPendingCheck(encounter.id, request.id, "The requested target is no longer available.");
+  const actorName = participantDisplayName(encounter, actor);
+  const npcName = targetDisplayName(npc);
+  if (encounter.actorsActed?.[actor.id]) return cancelPendingCheck(encounter.id, request.id, `${actorName} has already acted this round.`);
+  if (request.type === "chase" && (npc.id !== encounter.activeNpcId || npc.availability === "exhausted")) {
+    return cancelPendingCheck(encounter.id, request.id, `${npcName} is no longer the active obstacle.`);
+  }
+  if (request.type === "research" && !researchSourceAvailableForActor(npc, actor.id)) {
+    const state = researchActorState(npc, actor.id);
+    return cancelPendingCheck(encounter.id, request.id, state.availability === "unavailable" ? `${npcName} is unavailable to ${actorName}.` : `${actorName} has exhausted the Research Points available from ${npcName}.`);
+  }
   request.npcId = npc.id;
   const list = request.type === "discovery" ? npc.discovery : npc.influence;
   let skill = request.skillId ? list.find((s) => s.id === request.skillId) : list.find((s) => s.slug === request.skillSlug);
@@ -2440,7 +2574,7 @@ async function adjudicate(request) {
     skill = { id: `attempt:${request.skillSlug}`, slug: request.skillSlug, label: request.skillLabel ?? request.skillSlug,
       dc: Number(secret?.dc ?? list[0]?.dc ?? 20), invalidDiscovery: true };
   }
-  if (!skill) return ui.notifications.error("The requested skill is no longer available.");
+  if (!skill) return cancelPendingCheck(encounter.id, request.id, "The requested skill is no longer available.");
   encounter.activeActorId = actor.id;
   encounter.activeNpcId = npc.id;
   await Store.save(encounter);
@@ -2448,12 +2582,6 @@ async function adjudicate(request) {
   tracker?.render(false);
   renderCinematicHud();
   renderInfluenceSidebar();
-  const requestAction = request.type === "research"
-    ? "Research"
-    : request.type === "chase" ? "Overcome" : request.type === "discovery" ? "Discover information about" : "Influence";
-  await ChatMessage.create({
-    content: `<div class="influence-chat influence-check-request"><strong>Check Requested</strong><p>${esc(actorName)} is trying to ${requestAction} ${esc(npcName)} with ${esc(skill.label)}.</p></div>`
-  });
   const mods = [
     { id: "weakness", label: npc.weakness.label, value: npc.weakness.value, type: npc.weakness.type, mode: npc.weakness.mode ?? "roll", description: npc.weakness.description },
     { id: "strength", label: npc.strength.label, value: npc.strength.value, type: npc.strength.type, mode: npc.strength.mode ?? "roll", description: npc.strength.description },
@@ -2464,6 +2592,7 @@ async function adjudicate(request) {
   const invalidNotice = skill.invalidDiscovery ? `<p class="hint"><strong>GM:</strong> This is not a valid Discovery skill for this encounter. The blind roll consumes the character's action but cannot grant a Discovery.</p>` : "";
   const content = `<form class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></form>`;
   const adjudicationContent = request.type === "research" ? content.replace(" influences ", " researches ") : request.type === "chase" ? content.replace(" influences ", " attempts ") : content;
+  adjudicationOpen = true;
   new Dialog({
     title: `Adjudicate ${request.type === "research" ? "Research" : request.type === "chase" ? "Chase" : "Influence"} Check`, content: adjudicationContent,
     render: (html) => {
@@ -2494,12 +2623,19 @@ async function adjudicate(request) {
         encounter.activeEffects.push(...customMods.filter((mod) => mod.persist).map((mod) => ({ id: randomID(), kind: "modifier", targetNpcId: npc.id, label: mod.label, value: mod.value, type: mod.type, mode: "roll", scope: "both", skills: [], uses: 999, remaining: 999 })));
         await executeCheck(encounter, request, actor, skill, selected.filter((m) => m.selected), dcAdjust);
       } },
-      cancel: { label: "Cancel Request" }
-    }, default: "roll"
+      cancel: { label: "Return to Queue" }
+    }, default: "roll", close: () => { adjudicationOpen = false; }
   }, { width: 520 }).render(true);
 }
 
 async function executeCheck(encounter, request, actor, skill, selected, dcAdjust) {
+  const adjudicationEffects = encounter.activeEffects ?? [];
+  const currentEncounter = Store.get(encounter.id);
+  if (currentEncounter) {
+    const currentEffectIds = new Set((currentEncounter.activeEffects ?? []).map((effect) => effect.id));
+    currentEncounter.activeEffects.push(...adjudicationEffects.filter((effect) => !currentEffectIds.has(effect.id)));
+    encounter = currentEncounter;
+  }
   const npc = encounter.npcs.find((entry) => entry.id === request.npcId) ?? encounter.npcs[0];
   if (!npc) return ui.notifications.error("The influence target is no longer available.");
   const actorName = participantDisplayName(encounter, actor);
@@ -2527,6 +2663,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   if (!roll) return;
   const degree = Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
   const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
+  const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
   const points = request.type === "research"
     ? Number(npc.awards?.[["criticalFailure", "failure", "success", "criticalSuccess"][degree]] ?? 0)
     : ["influence", "chase"].includes(request.type) ? ([ -1, 0, 1, 2 ][degree] ?? 0) : 0;
@@ -2546,9 +2683,12 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   }
   if (request.type === "influence") npc.points = Math.max(0, npc.points + points);
   let chaseWonNow = false;
+  let chaseObstacleCompleted = false;
+  let canceledChaseRequests = [];
   if (request.type === "chase") {
     npc.points = Math.max(0, Math.min(npc.maximumPoints, Number(npc.points) + points));
     if (npc.maximumPoints && npc.points >= npc.maximumPoints) {
+      chaseObstacleCompleted = true;
       npc.availability = "exhausted";
       const index = encounter.npcs.findIndex((entry) => entry.id === npc.id);
       const next = encounter.npcs[index + 1];
@@ -2565,9 +2705,14 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     ? npc.thresholds.filter((threshold) => threshold.points <= previousPoints && threshold.points > npc.points)
     : [];
   if (request.type === "research") {
-    const room = npc.maximumPoints ? Math.max(0, npc.maximumPoints - npc.points) : Math.max(0, points);
-    const applied = points > 0 ? Math.min(points, room) : points;
+    const actorState = researchActorState(npc, actor.id);
+    const sourceRoom = npc.maximumPoints ? Math.max(0, npc.maximumPoints - npc.points) : Math.max(0, points);
+    const actorRoom = actorState.maximum ? Math.max(0, actorState.maximum - actorState.points) : Math.max(0, points);
+    const applied = points > 0 ? Math.min(points, sourceRoom, actorRoom) : points;
     npc.points = Math.max(0, npc.points + Math.max(0, applied));
+    npc.researchByActor[actor.id] ??= { points: 0, availability: "available" };
+    npc.researchByActor[actor.id].points = Math.max(0, Number(npc.researchByActor[actor.id].points) + Math.max(0, applied));
+    if (npc.maximumPointsPerActor && npc.researchByActor[actor.id].points >= npc.maximumPointsPerActor) npc.researchByActor[actor.id].availability = "exhausted";
     encounter.researchPoints = Math.max(0, Number(encounter.researchPoints) + applied);
     if (npc.maximumPoints && npc.points >= npc.maximumPoints) npc.availability = "exhausted";
     logEntry.detailLabel = "Discoveries Gained";
@@ -2581,12 +2726,18 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
       .flatMap((threshold) => [threshold.label, ...threshold.boons.map((boon) => boon.label)]);
   }
   encounter.actorsActed[actor.id] = true;
+  encounter.pendingChecks = (encounter.pendingChecks ?? []).filter((entry) => entry.id !== request.id);
+  if (chaseObstacleCompleted) {
+    canceledChaseRequests = encounter.pendingChecks.filter((entry) => entry.npcId === npc.id);
+    encounter.pendingChecks = encounter.pendingChecks.filter((entry) => entry.npcId !== npc.id);
+  }
   for (const mod of selected.filter((m) => m.id.startsWith("boon:"))) {
     const boonId = mod.id.slice(5);
     const boon = findBoon(encounter, boonId);
     if (boon) boon.remaining = Math.max(0, (boon.remaining ?? boon.uses) - 1);
   }
   await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
   const resultText = request.type === "discovery"
     ? "Discovery checks do not award Influence Points."
     : request.type === "research"
@@ -2596,7 +2747,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
         : `${signed(points)} Influence Point${Math.abs(points) === 1 ? "" : "s"}`;
   if (request.type !== "discovery") {
     await ChatMessage.create({
-      content: `<div class="influence-chat influence-result"><strong>${esc(encounter.name)} — ${esc(npcName)}</strong><p>${esc(actorName)} used ${esc(skill.label)}.${breakdown ? ` Modifiers: ${breakdown}.` : ""}</p><p><strong>${resultText}</strong></p></div>`,
+      content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(npcName)}</strong><p>${esc(actorName)} used ${esc(skill.label)}.${breakdown ? ` Modifiers: ${breakdown}.` : ""}</p><p><strong>${outcome} — ${resultText}</strong></p></div>`,
       style: CONST.CHAT_MESSAGE_STYLES.OOC,
       flags: { [MODULE_ID]: { messageKind: "result" } }
     });
@@ -2608,7 +2759,17 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
       style: CONST.CHAT_MESSAGE_STYLES.OOC,
       flags: { [MODULE_ID]: { messageKind: "result" } }
     });
+    if (!chaseWonNow) {
+      const subjectName = String(encounter.chaseSubject?.nickname ?? "").trim() || encounter.chaseSubject?.name;
+      const genericSubject = !subjectName || subjectName === "Chase Objective";
+      const pursuer = encounter.chaseType === "run-away" || /pursuer/i.test(encounter.chaseSubject?.label ?? "");
+      const progressMessage = pursuer
+        ? `You're pulling farther ahead of ${genericSubject ? "the pursuer" : subjectName}.`
+        : `You're catching up with ${genericSubject ? "the quarry" : subjectName}.`;
+      await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-chase-progress"><strong>Chase Progress</strong><p>${esc(progressMessage)}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+    }
   }
+  for (const canceled of canceledChaseRequests) await notifyPendingCheck(canceled, `${npcName} was overcome before this queued check could be adjudicated.`);
   if (chaseWonNow && encounter.victorySplashMode === "automatic") triggerVictorySplash(encounter);
   if (newlyReachedInfluenceThresholds.length) {
     const rewards = influenceRewardSections(newlyReachedInfluenceThresholds);
@@ -2626,7 +2787,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     });
   }
   if (request.type === "discovery" && (skill.invalidDiscovery || degree < 2)) {
-    await ChatMessage.create({ content: `<div class="influence-chat influence-discovery-failure"><strong>Discovery</strong><p>${esc(actorName)} failed to learn anything new about ${esc(npcName)}.</p></div>` });
+    await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-failure influence-discovery-failure"><strong>Discovery</strong><p>${esc(actorName)} failed to learn anything new about ${esc(npcName)}.</p></div>`, flags: { [MODULE_ID]: { messageKind: "result" } } });
   }
   if (request.type === "discovery" && !skill.invalidDiscovery && degree >= 2) await offerDiscovery(encounter, request.requesterId, degree === 3 ? 2 : 1, logEntry.id, actor.id);
   tracker.render(false);
@@ -2737,7 +2898,8 @@ Hooks.once("ready", async () => {
   if (game.user.isGM && orphanedActiveId && !Store.get(orphanedActiveId)) await Store.setActive("");
   tracker = new InfluenceTracker();
   game.socket.on(SOCKET, (payload) => {
-    if (payload.action === "check-request" && game.user.isGM && game.users.activeGM?.id === game.user.id) adjudicate(payload);
+    if (payload.action === "check-request" && game.user.isGM && game.users.activeGM?.id === game.user.id) receiveCheckRequest(payload);
+    if (payload.action === "check-request-status" && payload.userId === game.user.id) ui.notifications.info(payload.message);
     if (payload.action === "discovery-offer" && payload.userId === game.user.id) collectDiscoveryChoices(payload.choices, payload.actorId).then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
     if (payload.action === "discovery-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveDiscovery(payload.encounterId, payload.userId, payload.selections, payload.logEntryId);
     if (payload.action === "progress-clock-refresh") progressClockDatabase()?.refresh?.();

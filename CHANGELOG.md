@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Renamed the Chase action to “Roll to Overcome” in both the encounter window and sidebar.
+- Added PF2e-style outcome colors to subsystem result cards: green for critical success, blue for success, orange for failure, and red for critical failure.
+- Added a persistent, serialized GM check-request queue with duplicate prevention, explicit adjudicate/cancel controls, requester confirmations, and automatic cancellation of stale requests when another PC overcomes the obstacle.
+- Added Chase progress announcements when the party overcomes an obstacle without yet winning, including quarry catch-up and pursuer lead messages.
+- Standardized newly added player-facing punctuation on em dashes.
+- Added optional per-PC maximum RP limits and per-PC source availability for Research encounters. Research awards now track each participant's contribution by source, enforce personal caps, and automatically exhaust that source for the affected PC only.
+- Added a GM-facing per-source participant ledger with editable RP contributions and access states. Manual contribution changes keep the source and encounter totals synchronized.
+- Extended Research text parsing to recognize “Maximum RP” and common “Maximum RP per PC” forms.
+- Fixed duplicated Research encounters retaining accumulated shared, source, or per-PC progress.
+
 ## 0.4.0 — 2026-09-08
 
 - Added the Chase Down catch victory condition and public “You caught…” notification. Chase victories can now show a full-screen, image-backed splash with customizable headline, either automatically or from a GM-only trigger in the tracker.
