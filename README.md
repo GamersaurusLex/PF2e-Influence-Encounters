@@ -1,6 +1,6 @@
 # Influence Encounters for PF2e
 
-A Foundry VTT module for running structured Pathfinder Second Edition influence encounters.
+A Foundry VTT module for running structured Pathfinder Second Edition Influence, Research, Chase, and Skill encounters.
 
 ## Manifest installation
 
@@ -12,6 +12,7 @@ https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/latest/down
 
 ## Features
 
+- Skill Encounters with a shared point goal, configurable round limit, reusable challenges, and automatic success or failure outcomes
 - World-scoped encounter builder and reusable encounter records
 - Independent per-NPC Influence Points, Discovery and Influence skills, DCs, weaknesses, resistances, thresholds, and rewards
 - Player check requests with no written-response field
@@ -33,6 +34,8 @@ https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/latest/down
 - Automatically maintained Journal record; **End & Publish** makes the player-safe results and check log available to players
 - JSON export
 - Preconfigured Lanekar and five-NPC Peace Talks sample encounters
+- Preconfigured Governor and Abeo chase encounters
+- Whole-chase text parsing for Paizo-style obstacle blocks, Chase Points, Overcome checks, DCs, and descriptions
 
 ## Installation
 

@@ -143,6 +143,52 @@ function parseResearchSource(source, npc) {
   return found;
 }
 
+function chaseTitle(value = "") {
+  return String(value).toLowerCase().replace(/(^|[\s—-])([a-z])/g, (_match, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
+}
+
+function parseChaseChecks(text) {
+  const results = [];
+  const matches = [...String(text).replace(/\s+/g, " ").matchAll(/\bDC\s*(\d+)\s*/gi)];
+  matches.forEach((match, index) => {
+    const segment = text.replace(/\s+/g, " ").slice(match.index + match[0].length, matches[index + 1]?.index ?? text.length)
+      .replace(/^\s*[,;:]\s*/, "").split(/\s+to\b/i)[0].replace(/[.,;:]+\s*$/, "").trim();
+    segment.split(/\s+or\s+|\s*[,;]\s*/i).map((label) => label.trim()).filter(Boolean)
+      .forEach((label) => results.push(parsedSkill(label, match[1], "chase")));
+  });
+  return results;
+}
+
+function parseChaseObstacles(source) {
+  const text = String(source).replace(/\r/g, "");
+  const headers = [...text.matchAll(/^\s*([^\n]+?)\s+OBSTACLE\s+(\d+)\s*$/gim)];
+  const obstacles = [];
+  for (let index = 0; index < headers.length; index += 1) {
+    const header = headers[index];
+    const body = text.slice(header.index + header[0].length, headers[index + 1]?.index ?? text.length).trim();
+    const lines = body.split("\n").map((line) => line.trim()).filter(Boolean);
+    const statsIndex = lines.findIndex((line) => /\bChase\s+Points?\b/i.test(line));
+    if (statsIndex < 0) continue;
+    const statLines = lines.slice(statsIndex);
+    let lastDcLine = -1;
+    statLines.forEach((line, lineIndex) => { if (/\bDC\s*\d+/i.test(line)) lastDcLine = lineIndex; });
+    const skillContinuation = new RegExp(`^(?:${[...PF2E_SKILLS, ...PF2E_SAVES].map((skill) => skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?:\\s+or\\s+.+)?\\b`, "i");
+    let descriptionIndex = -1;
+    for (let lineIndex = lastDcLine + 1; lineIndex < statLines.length; lineIndex += 1) {
+      const line = statLines[lineIndex];
+      if (/^[A-Z](?:[A-Za-z’'\-]+)?\b/.test(line) && !skillContinuation.test(line) && !/^DC\b/i.test(line)) { descriptionIndex = lineIndex; break; }
+    }
+    const statText = statLines.slice(0, descriptionIndex < 0 ? statLines.length : descriptionIndex).join(" ");
+    const points = Number(statText.match(/\bChase\s+Points?\s*(\d+)/i)?.[1] ?? 0);
+    const overcome = statText.match(/\bOvercome\s+(.+)$/i)?.[1] ?? "";
+    const checks = parseChaseChecks(overcome);
+    if (!points || !checks.length) continue;
+    const description = descriptionIndex < 0 ? "" : statLines.slice(descriptionIndex).join(" ");
+    obstacles.push(chaseObstacle(randomID(), chaseTitle(header[1].trim()), points, checks.map((skill) => [skill.slug, skill.label, skill.dc, skill.lore]), description));
+  }
+  return { obstacles, level: headers.length ? Number(headers[0][2]) : 0 };
+}
+
 function normalizeReward(boon, targetId = "") {
   boon.id ||= randomID();
   boon.kind = ["modifier", "ip", "narrative"].includes(boon.kind) ? boon.kind : (boon.mode === "narrative" ? "narrative" : "modifier");
@@ -180,7 +226,7 @@ function isGeneratedPlaceholderNpc(encounter, npc) {
 }
 
 function normalizeEncounterCollections(encounter) {
-  encounter.subsystemType = ["influence", "research", "chase"].includes(encounter.subsystemType) ? encounter.subsystemType : "influence";
+  encounter.subsystemType = ["influence", "research", "chase", "skill"].includes(encounter.subsystemType) ? encounter.subsystemType : "influence";
   encounter.chaseType = ["chase-down", "run-away", "beat-clock", "competitive", "custom"].includes(encounter.chaseType) ? encounter.chaseType : "chase-down";
   encounter.currentRound = Math.max(1, Number(encounter.currentRound) || 1);
   encounter.subjectStartPosition = Math.max(0, Math.trunc(Number(encounter.subjectStartPosition ?? encounter.opponentPosition ?? 1) || 0));
@@ -188,7 +234,9 @@ function normalizeEncounterCollections(encounter) {
   encounter.opponentPace = Math.max(0, Math.trunc(Number(encounter.opponentPace ?? 1) || 0));
   encounter.subjectTurnOrder = ["before", "after"].includes(encounter.subjectTurnOrder) ? encounter.subjectTurnOrder : (encounter.chaseType === "run-away" ? "after" : "before");
   encounter.obscureFutureObstacles = !!encounter.obscureFutureObstacles;
-  encounter.roundLimit = Math.max(0, Number(encounter.roundLimit) || 0);
+  encounter.roundLimit = encounter.subsystemType === "skill"
+    ? Math.max(1, Number(encounter.roundLimit) || 3)
+    : Math.max(0, Number(encounter.roundLimit) || 0);
   encounter.dcVisibility = ["exact", "relative", "hidden"].includes(encounter.dcVisibility) ? encounter.dcVisibility : "exact";
   encounter.victoryText ??= "";
   encounter.failureText ??= "";
@@ -196,6 +244,10 @@ function normalizeEncounterCollections(encounter) {
   encounter.victorySplashText ||= "You Win!";
   encounter.victorySplashMode = encounter.victorySplashMode === "manual" ? "manual" : "automatic";
   encounter.chaseOutcome = ["victory", "failure"].includes(encounter.chaseOutcome) ? encounter.chaseOutcome : "";
+  encounter.skillPoints = Math.max(0, Number(encounter.skillPoints) || 0);
+  encounter.skillPointGoal = Math.max(1, Number(encounter.skillPointGoal) || 8);
+  encounter.skillOutcome = ["victory", "failure"].includes(encounter.skillOutcome) ? encounter.skillOutcome : "";
+  encounter.skillDescription ??= "";
   encounter.chaseDescription ??= "";
   encounter.chaseSubject = foundry.utils.mergeObject({ name: "Chase Objective", nickname: "", image: "icons/svg/mystery-man.svg", label: "Quarry", actorId: "" }, encounter.chaseSubject ?? {}, { inplace: false, overwrite: true });
   encounter.researchPoints = Math.max(0, Number(encounter.researchPoints) || 0);
@@ -222,7 +274,7 @@ function normalizeEncounterCollections(encounter) {
     effect.value = Number(effect.value) || 0;
     effect.type = ["circumstance", "status", "item", "untyped"].includes(effect.type) ? effect.type : "circumstance";
     effect.mode = effect.mode === "dc" ? "dc" : "roll";
-    effect.scope = encounter.subsystemType === "chase" ? "chase" : (effect.scope ?? "both");
+    effect.scope = ["chase", "skill"].includes(encounter.subsystemType) ? encounter.subsystemType : (effect.scope ?? "both");
     effect.targetNpcId ??= "";
     effect.skills = Array.isArray(effect.skills) ? effect.skills : String(effect.skills ?? "").split(",").map((skill) => skillSlug(skill)).filter(Boolean);
     effect.uses = Math.max(1, Number(effect.uses) || 999);
@@ -240,7 +292,7 @@ function normalizeEncounterCollections(encounter) {
   }
   encounter.npcs.forEach((npc) => {
     npc.id ||= randomID();
-    npc.name ||= encounter.subsystemType === "chase" ? "New Obstacle" : "Influence Target";
+    npc.name ||= encounter.subsystemType === "chase" ? "New Obstacle" : encounter.subsystemType === "skill" ? "New Challenge" : "Influence Target";
     npc.image ||= "icons/svg/mystery-man.svg";
     npc.actorId ||= "";
     npc.nickname ??= "";
@@ -305,7 +357,7 @@ function normalizeEncounterCollections(encounter) {
   encounter.journalId ??= "";
   encounter.endedAt ??= null;
   encounter.folderId ??= "";
-  encounter.encounterType = ["research", "chase"].includes(encounter.subsystemType) || encounter.encounterType === "multiple" ? "multiple" : "single";
+  encounter.encounterType = ["research", "chase", "skill"].includes(encounter.subsystemType) || encounter.encounterType === "multiple" ? "multiple" : "single";
   encounter.discoveries ??= {};
   for (const record of Object.values(encounter.discoveries)) {
     record.npcs ??= {};
@@ -335,6 +387,10 @@ const DEFAULT_ENCOUNTER = {
   currentPhase: 1,
   points: 0,
   researchPoints: 0,
+  skillPoints: 0,
+  skillPointGoal: 8,
+  skillOutcome: "",
+  skillDescription: "",
   researchThresholds: [],
   researchInterval: { value: 1, unit: "hour" },
   progressClock: { enabled: false, clockId: "" },
@@ -576,6 +632,43 @@ const WHERE_IS_THE_GOVERNOR = {
   ]
 };
 
+const ABEO_MARKET_CHASE_TEXT = `THROWN POWDER OBSTACLE 5
+Chase Points 5; Overcome DC 20
+Acrobatics or Athletics to avoid
+the powder, DC 18 Crafting
+to recognize the threat of the
+powder and shield the eyes early
+Abeo throws a bunch of alchemical powders into the air, obscuring vision and making a huge mess that’s difficult to navigate.
+CROWDED MARKET OBSTACLE 5
+Abeo
+Chase Points 5; Overcome DC 20 Acrobatics or Athletics to weave or push through the crowd, DC 18 Society to follow the flow
+It’s difficult to maneuver through the bustling market.
+TWISTING ALLEYWAYS OBSTACLE 5
+Chase Points 5; Overcome DC 22 Perception to navigate, DC 18 Society to know the neighborhood
+These tight, dense alleyways are filled with objects that threaten to trip and confuse people rushing through.
+BUSY CANAL OBSTACLE 5
+Chase Points 5; Overcome DC 20 Acrobatics to vault across using poles or hanging lines, DC 18 Athletics to leap from boat to boat
+Clotheslines hang across this narrow section of the canal, which is filled with boats carrying bird cages, stacks of pottery, and other impediments.
+GUARDED GATE OBSTACLE 5
+Chase Points 5; Overcome DC 25 Athletics to run past the guards and climb, DC 18 Deception or Diplomacy to convince the guards to open up the gates, DC 20 Stealth to slip past the guards
+A metal gate and a few bored guards are meant to keep unwanted visitors out of this affluent neighborhood.
+CARNIVOROUS GARDENS OBSTACLE 5
+Chase Points 5; Overcome DC 20 Acrobatics to weave past snapping plants, DC 18 Nature to trick the carnivorous plants, DC 22 Survival to plot a clear path
+The chase leads through a lush garden full of large carnivorous plants, all of which take a keen interest in anyone who passes through.`;
+
+const parsedAbeoChase = parseChaseObstacles(ABEO_MARKET_CHASE_TEXT);
+const ABEO_MARKET_CHASE = {
+  ...deepClone(DEFAULT_ENCOUNTER),
+  id: "abeo-market-chase", name: "Abeo's Market Chase", subsystemType: "chase", encounterType: "multiple",
+  image: "icons/svg/wing.svg", level: parsedAbeoChase.level || 5, publicPoints: true, phases: parsedAbeoChase.obstacles.length, currentRound: 1,
+  chaseType: "chase-down", subjectStartPosition: 1, opponentPosition: 1, opponentPace: 1, subjectTurnOrder: "before", obscureFutureObstacles: false, roundLimit: 0, dcVisibility: "exact",
+  victoryText: "The PCs catch Abeo.", failureText: "Abeo escapes.",
+  chaseDescription: "The PCs pursue Abeo through a market, twisting alleys, canals, guarded streets, and dangerous gardens.",
+  chaseSubject: { name: "Abeo", nickname: "Abeo", image: "icons/svg/mystery-man.svg", label: "Quarry", actorId: "" },
+  discovery: [], influence: [], thresholds: [], npcs: parsedAbeoChase.obstacles,
+  activeNpcId: parsedAbeoChase.obstacles[0]?.id ?? "", activeEffects: []
+};
+
 class Store {
   static all() { return deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {}); }
   static activeId() { return game.settings.get(MODULE_ID, SETTINGS.active) ?? ""; }
@@ -647,12 +740,14 @@ async function syncEncounterProgressClocks(encounter) {
   const shouldDisplay = encounter.progressClock?.enabled && ["active", "paused"].includes(encounter.status);
   if (!shouldDisplay) return removeEncounterProgressClocks(encounter);
   const clocks = [];
-  if (encounter.subsystemType === "research") {
+  if (["research", "skill"].includes(encounter.subsystemType)) {
     encounter.progressClock.clockId ||= randomID();
     const thresholdMaximum = Math.max(0, ...encounter.researchThresholds.map((threshold) => Number(threshold.points) || 0));
     const sourceMaximum = encounter.npcs.reduce((total, source) => total + (Number(source.maximumPoints) || 0), 0);
-    const max = Math.min(99, Math.max(1, thresholdMaximum, sourceMaximum, Number(encounter.researchPoints) || 0));
-    clocks.push({ id: encounter.progressClock.clockId, name: encounter.name, value: Math.min(max, Math.max(0, Number(encounter.researchPoints) || 0)), max });
+    const value = encounter.subsystemType === "skill" ? Number(encounter.skillPoints) || 0 : Number(encounter.researchPoints) || 0;
+    const configuredMaximum = encounter.subsystemType === "skill" ? encounter.skillPointGoal : Math.max(thresholdMaximum, sourceMaximum);
+    const max = Math.min(99, Math.max(1, configuredMaximum, value));
+    clocks.push({ id: encounter.progressClock.clockId, name: encounter.name, value: Math.min(max, Math.max(0, value)), max });
   } else {
     encounter.progressClock.clockId = "";
     for (const npc of encounter.npcs) {
@@ -766,7 +861,8 @@ function findBoon(encounter, boonId) {
 function publicEncounterHtml(encounter) {
   const research = encounter.subsystemType === "research";
   const chase = encounter.subsystemType === "chase";
-  const results = chase ? encounter.npcs.map((obstacle) => `<section><h3>${esc(targetDisplayName(obstacle))} — ${obstacle.points}/${obstacle.maximumPoints} CP</h3>${obstacle.background ? `<p>${esc(obstacle.background)}</p>` : ""}</section>`).join("") : research ? encounter.npcs.filter((source) => source.availability !== "hidden").map((source) =>
+  const skillEncounter = encounter.subsystemType === "skill";
+  const results = skillEncounter ? encounter.npcs.map((challenge) => `<section><h3>${esc(targetDisplayName(challenge))}</h3>${challenge.background ? `<p>${esc(challenge.background)}</p>` : ""}</section>`).join("") : chase ? encounter.npcs.map((obstacle) => `<section><h3>${esc(targetDisplayName(obstacle))} — ${obstacle.points}/${obstacle.maximumPoints} CP</h3>${obstacle.background ? `<p>${esc(obstacle.background)}</p>` : ""}</section>`).join("") : research ? encounter.npcs.filter((source) => source.availability !== "hidden").map((source) =>
     `<section><h3>${esc(targetDisplayName(source))}${encounter.publicPoints ? ` — ${source.points}${source.maximumPoints ? `/${source.maximumPoints}` : ""} RP` : ""}</h3>${source.background ? `<p>${esc(source.background)}</p>` : ""}</section>`).join("") : encounter.npcs.map((npc) => {
     const reached = npc.thresholds.filter((threshold) => npc.points >= threshold.points);
     const rewards = reached.map((threshold) => `<article><h4>${esc(threshold.label)}</h4><p>${esc(threshold.text)}</p>${threshold.boons?.filter((boon) => boon.playerVisible).length ? `<ul>${threshold.boons.filter((boon) => boon.playerVisible).map((boon) => `<li><strong>${esc(boon.label)}</strong>${boon.description ? ` — ${esc(boon.description)}` : ""}</li>`).join("")}</ul>` : ""}</article>`).join("");
@@ -775,15 +871,15 @@ function publicEncounterHtml(encounter) {
   const rows = encounter.checkLog.map((entry) => {
     const details = (entry.details ?? []).map(concealDiscoveryDC);
     const detailHtml = details.length ? `<ul>${details.map((detail) => `<li>${esc(detail)}</li>`).join("")}</ul>` : "";
-    return `<tr><td>${esc(entry.actorName)}</td><td>${esc(entry.npcName ?? "")}</td><td>${entry.type === "research" ? "Research" : entry.type === "chase" ? "Chase" : entry.type === "discovery" ? "Discovery" : "Influence"}</td><td>${esc(entry.skillLabel)}</td><td>${esc(String(entry.outcome).replace(/ — Invalid Discovery Skill$/, ""))}${detailHtml}</td></tr>`;
+    return `<tr><td>${esc(entry.actorName)}</td><td>${esc(entry.npcName ?? "")}</td><td>${entry.type === "research" ? "Research" : entry.type === "chase" ? "Chase" : entry.type === "skill" ? "Skill" : entry.type === "discovery" ? "Discovery" : "Influence"}</td><td>${esc(entry.skillLabel)}</td><td>${esc(String(entry.outcome).replace(/ — Invalid Discovery Skill$/, ""))}${detailHtml}</td></tr>`;
   }).join("");
   const status = encounter.endedAt ? "Completed" : encounter.status === "paused" ? "Paused" : "In Progress";
   const discoveries = research ? encounter.researchThresholds.filter((threshold) => threshold.points <= encounter.researchPoints).map((threshold) => `<article><h4>${esc(threshold.label)} — ${threshold.points} RP</h4><p>${esc(threshold.text)}</p></article>`).join("") : "";
-  return `<article class="influence-encounter-archive"><h1>${esc(encounter.name)}</h1><p><strong>${status}</strong> · ${research ? `${encounter.researchPoints} RP · ${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : chase ? `Round ${encounter.currentRound}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p><section><h2>${research ? "Sources" : chase ? "Obstacles" : "Targets and Results"}</h2>${results}</section>${research ? `<section><h2>Discoveries</h2>${discoveries}</section>` : ""}<section><h2>Check Log</h2>${rows ? `<table><thead><tr><th>PC</th><th>Target</th><th>Check</th><th>Skill</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table>` : "<p>No checks have been completed.</p>"}</section></article>`;
+  return `<article class="influence-encounter-archive"><h1>${esc(encounter.name)}</h1><p><strong>${status}</strong> · ${research ? `${encounter.researchPoints} RP · ${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : skillEncounter ? `${encounter.skillPoints}/${encounter.skillPointGoal} SP · Round ${encounter.currentRound}${encounter.roundLimit ? `/${encounter.roundLimit}` : ""}` : chase ? `Round ${encounter.currentRound}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p><section><h2>${research ? "Sources" : skillEncounter ? "Challenges" : chase ? "Obstacles" : "Targets and Results"}</h2>${results}</section>${research ? `<section><h2>Discoveries</h2>${discoveries}</section>` : ""}<section><h2>Check Log</h2>${rows ? `<table><thead><tr><th>PC</th><th>Target</th><th>Check</th><th>Skill</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table>` : "<p>No checks have been completed.</p>"}</section></article>`;
 }
 
 function encounterJournalName(encounter) {
-  return `${encounter.subsystemType === "research" ? "Research" : encounter.subsystemType === "chase" ? "Chase" : "Influence"}: ${encounter.name}${encounter.status === "paused" ? " (Paused)" : ""}`;
+  return `${encounter.subsystemType === "research" ? "Research" : encounter.subsystemType === "chase" ? "Chase" : encounter.subsystemType === "skill" ? "Skill Encounter" : "Influence"}: ${encounter.name}${encounter.status === "paused" ? " (Paused)" : ""}`;
 }
 
 async function syncEncounterJournal(encounter) {
@@ -998,6 +1094,7 @@ class InfluenceTracker extends Application {
     const encounter = Store.get();
     const isResearch = encounter?.subsystemType === "research";
     const isChase = encounter?.subsystemType === "chase";
+    const isSkill = encounter?.subsystemType === "skill";
     const participants = encounterParticipants(encounter);
     if (encounter && !participants.some((actor) => actor.id === encounter.activeActorId)) encounter.activeActorId = "";
     const selection = encounterViewSelection(encounter);
@@ -1011,8 +1108,8 @@ class InfluenceTracker extends Application {
     const selectedResearchActor = isResearch ? participants.find((actor) => actor.id === selection.actorId) : null;
     const activeResearchState = isResearch && activeNpcRecord && selection.actorId ? researchActorState(activeNpcRecord, selection.actorId) : null;
     const activeNpc = activeNpcRecord ? { ...activeNpcRecord, name: targetDisplayName(activeNpcRecord), researchActorState: activeResearchState } : null;
-    const thresholdSource = isResearch ? (encounter?.researchThresholds ?? []) : isChase ? [] : (activeNpcRecord?.thresholds ?? []);
-    const currentPoints = isResearch ? Number(encounter?.researchPoints) : Number(activeNpcRecord?.points);
+    const thresholdSource = isResearch ? (encounter?.researchThresholds ?? []) : (isChase || isSkill) ? [] : (activeNpcRecord?.thresholds ?? []);
+    const currentPoints = isResearch ? Number(encounter?.researchPoints) : isSkill ? Number(encounter?.skillPoints) : Number(activeNpcRecord?.points);
     const thresholds = thresholdSource.map((threshold) => ({
       ...threshold,
       unlocked: currentPoints >= threshold.points,
@@ -1021,7 +1118,7 @@ class InfluenceTracker extends Application {
     const knownDiscoveries = (encounter?.discoveries?.[game.user.id]?.npcs?.[activeNpc?.id]?.facts ?? []).map(concealDiscoveryDC);
     const pendingByLog = new Map((encounter?.pendingDiscoveries ?? []).map((pending) => [pending.logEntryId, pending]));
     const checkLog = [...(encounter?.checkLog ?? [])].reverse().map((entry) => ({ ...entry,
-      typeLabel: entry.type === "research" ? "Research" : entry.type === "chase" ? "Chase" : entry.type === "discovery" ? "Discovery" : "Influence",
+      typeLabel: entry.type === "research" ? "Research" : entry.type === "chase" ? "Chase" : entry.type === "skill" ? "Skill" : entry.type === "discovery" ? "Discovery" : "Influence",
       pendingDiscovery: pendingByLog.get(entry.id),
       details: entry.type === "discovery" ? (entry.details ?? []).map(concealDiscoveryDC) : (entry.details ?? []),
       displayOutcome: !game.user.isGM && entry.type === "discovery"
@@ -1035,7 +1132,7 @@ class InfluenceTracker extends Application {
     const subjectIsPursuer = encounter?.chaseType === "run-away" || /pursuer/i.test(subjectRole);
     const chaseSubjectStatus = obscureChaseCourse ? `The ${subjectRole} is ${subjectIsPursuer ? "behind you" : "ahead of you"}.` : "";
     const standardDc = levelBasedDC(encounter?.level ?? 0);
-    const overcomeChecks = isChase ? (activeNpcRecord?.influence ?? []).map((skill) => {
+    const overcomeChecks = (isChase || isSkill) ? (activeNpcRecord?.influence ?? []).map((skill) => {
       let dcText = "";
       if (game.user.isGM || encounter.dcVisibility === "exact") dcText = `DC ${skill.dc}`;
       else if (encounter.dcVisibility === "relative") {
@@ -1045,10 +1142,10 @@ class InfluenceTracker extends Application {
       return { ...skill, dcText };
     }) : [];
     const sourceAvailable = isChase ? activeNpc?.availability !== "exhausted" : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, isResearch, isChase, obscureChaseCourse, chaseSubjectStatus,
+    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, isResearch, isChase, isSkill, obscureChaseCourse, chaseSubjectStatus,
       researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
-      pointLabel: isResearch ? "RP" : isChase ? "CP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : "Influence Targets",
-      actionLabel: isResearch ? "Research" : isChase ? "Roll to Overcome" : "Influence", currentPoints,
+      pointLabel: isResearch ? "RP" : isChase ? "CP" : isSkill ? "SP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : isSkill ? "Skill Challenges" : "Influence Targets",
+      actionLabel: isResearch ? "Research" : (isChase || isSkill) ? "Make a Check" : "Influence", currentPoints,
       pendingChecks: game.user.isGM ? (encounter?.pendingChecks ?? []).map((request, index) => {
         const queuedActor = game.actors.get(request.actorId);
         const queuedNpc = encounter.npcs.find((npc) => npc.id === request.npcId);
@@ -1058,12 +1155,13 @@ class InfluenceTracker extends Application {
           npcName: queuedNpc ? targetDisplayName(queuedNpc) : "Missing target", skillLabel: queuedSkill?.label ?? request.skillLabel ?? "Missing skill" };
       }) : [],
       isGM: game.user.isGM, showPoints: game.user.isGM || encounter?.publicPoints, noEncounter: !encounter, isPaused: encounter?.status === "paused",
-      canAct: !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !!selection.actorId && sourceAvailable,
+      canAct: !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !encounter.skillOutcome && !!selection.actorId && sourceAvailable,
       canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused",
       canTriggerVictorySplash: game.user.isGM && isChase && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual",
       canPrior: !isResearch && !isChase && encounter?.status === "active" && (encounter?.currentPhase ?? 1) > 1,
       canNext: !isResearch && !isChase && encounter?.status === "active" && (encounter?.currentPhase ?? 1) < (encounter?.phases ?? 1),
-      canNextRound: isChase && encounter?.status === "active" && !encounter?.chaseOutcome };
+      canNextRound: (isChase || isSkill) && encounter?.status === "active" && !encounter?.chaseOutcome && !encounter?.skillOutcome,
+      roundActionLabel: isSkill && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : "Next Round" };
   }
   activateListeners(html) {
     super.activateListeners(html);
@@ -1125,6 +1223,22 @@ class InfluenceTracker extends Application {
       const history = encounter.history;
       Object.assign(encounter, deepClone(entry.state), { history });
     } else if (action === "next-round") {
+      if (encounter.subsystemType === "skill") {
+        if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before ending the round.");
+        snapshot(encounter, "Finish skill encounter round");
+        if (encounter.roundLimit && encounter.currentRound >= encounter.roundLimit) {
+          encounter.skillOutcome = encounter.skillPoints >= encounter.skillPointGoal ? "victory" : "failure";
+          await ChatMessage.create({
+            content: `<div class="influence-chat influence-result ${encounter.skillOutcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${encounter.skillOutcome === "victory" ? "Skill Encounter Won" : "Skill Encounter Failed"}</strong><p>${esc(encounter.skillOutcome === "victory" ? (encounter.victoryText || "The party achieved its goal!") : (encounter.failureText || "The party ran out of time."))}</p></div>`,
+            style: CONST.CHAT_MESSAGE_STYLES.OOC,
+            flags: { [MODULE_ID]: { messageKind: "result" } }
+          });
+        } else {
+          encounter.currentRound += 1;
+          encounter.actorsActed = {};
+          await ChatMessage.create({ content: `<div class="influence-chat influence-result"><strong>Round ${encounter.currentRound}</strong><p>The party has ${encounter.skillPoints} of ${encounter.skillPointGoal} Skill Points.</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+        }
+      } else {
       snapshot(encounter, "Next chase round");
       encounter.currentRound += 1;
       encounter.opponentPosition += encounter.opponentPace;
@@ -1144,6 +1258,7 @@ class InfluenceTracker extends Application {
       if (encounter.opponentPosition >= encounter.npcs.length) {
         encounter.chaseOutcome = "failure";
         await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-reward-lost"><strong>Chase Lost</strong><p>${esc(encounter.failureText || "The quarry escaped.")}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC });
+      }
       }
     } else if (action === "pass-obstacle") {
       const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
@@ -1168,18 +1283,21 @@ class InfluenceTracker extends Application {
       const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
       const research = encounter.subsystemType === "research";
       const chase = encounter.subsystemType === "chase";
-      const value = await promptNumber(research ? "Adjust Research Points" : chase ? `Adjust Chase Points: ${targetDisplayName(npc)}` : `Adjust Influence Points: ${targetDisplayName(npc)}`, research ? encounter.researchPoints : npc.points);
+      const skillEncounter = encounter.subsystemType === "skill";
+      const value = await promptNumber(research ? "Adjust Research Points" : skillEncounter ? "Adjust Skill Points" : chase ? `Adjust Chase Points: ${targetDisplayName(npc)}` : `Adjust Influence Points: ${targetDisplayName(npc)}`, research ? encounter.researchPoints : skillEncounter ? encounter.skillPoints : npc.points);
       if (value === null) return;
       snapshot(encounter, action);
-      if (research) encounter.researchPoints = Math.max(0, value); else npc.points = Math.max(0, value);
+      if (research) encounter.researchPoints = Math.max(0, value); else if (skillEncounter) encounter.skillPoints = Math.max(0, value); else npc.points = Math.max(0, value);
     } else if (action === "change-ip") {
       const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
       const delta = Number(event.currentTarget.dataset.delta);
       if (!Number.isFinite(delta) || delta === 0) return;
       const research = encounter.subsystemType === "research";
       const chase = encounter.subsystemType === "chase";
-      snapshot(encounter, research ? `${signed(delta)} RP` : `${targetDisplayName(npc)}: ${signed(delta)} ${chase ? "CP" : "IP"}`);
+      const skillEncounter = encounter.subsystemType === "skill";
+      snapshot(encounter, research ? `${signed(delta)} RP` : skillEncounter ? `${signed(delta)} SP` : `${targetDisplayName(npc)}: ${signed(delta)} ${chase ? "CP" : "IP"}`);
       if (research) encounter.researchPoints = Math.max(0, Number(encounter.researchPoints) + delta);
+      else if (skillEncounter) encounter.skillPoints = Math.max(0, Number(encounter.skillPoints) + delta);
       else npc.points = Math.max(0, Number(npc.points) + delta);
     } else if (action === "apply-reward") {
       const boon = findBoon(encounter, event.currentTarget.dataset.id);
@@ -1332,6 +1450,7 @@ function renderInfluenceSidebar() {
     panel.classList.remove("directory");
     const research = encounter.subsystemType === "research";
     const chase = encounter.subsystemType === "chase";
+    const skillEncounter = encounter.subsystemType === "skill";
     const actors = encounterParticipants(encounter);
     const selection = encounterViewSelection(encounter);
     const actorRows = actors.map((actor) => {
@@ -1354,12 +1473,12 @@ function renderInfluenceSidebar() {
       return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-influence-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${subjectMarker}${research ? `${sourceStatus}${actorStatus}` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
     }).join("");
     const activeNpc = visibleSources.find((npc) => npc.id === selection.npcId) ?? visibleSources[0];
-    const points = research ? encounter.researchPoints : activeNpc?.points ?? 0;
-    const pointLabel = research ? "RP" : chase ? "CP" : "IP";
+    const points = research ? encounter.researchPoints : skillEncounter ? encounter.skillPoints : activeNpc?.points ?? 0;
+    const pointLabel = research ? "RP" : chase ? "CP" : skillEncounter ? "SP" : "IP";
     const researchDisabled = research && !researchSourceAvailableForActor(activeNpc, selection.actorId) ? " disabled" : "";
-    const actions = research ? `<button data-influence-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-influence-action="chase"><i class="fa-solid fa-person-running"></i> Roll to Overcome</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
+    const actions = research ? `<button data-influence-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-influence-action="chase"><i class="fa-solid fa-person-running"></i> Roll to Overcome</button>' : skillEncounter ? '<button data-influence-action="skill"><i class="fa-solid fa-dice-d20"></i> Make a Check</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
     const chaseStatus = obscureChaseCourse ? `<p class="chase-relative-status">The ${esc(encounter.chaseSubject?.label || "Subject")} is ${encounter.chaseType === "run-away" || /pursuer/i.test(encounter.chaseSubject?.label || "") ? "behind you" : "ahead of you"}.</p>` : "";
-    panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : chase ? `Round ${encounter.currentRound}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : ""} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" ? actions : ""}</div></div>`;
+    panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : (chase || skillEncounter) ? `Round ${encounter.currentRound}${skillEncounter && encounter.roundLimit ? ` of ${encounter.roundLimit}` : ""}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : skillEncounter ? `/${encounter.skillPointGoal}` : ""} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : skillEncounter ? "Skill Challenges" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" && !encounter.skillOutcome ? actions : ""}</div></div>`;
   }
   panel.onclick = (event) => {
     const button = event.target.closest("[data-influence-action]");
@@ -1562,7 +1681,8 @@ async function openCreateEncounterDialog(event, folderId = "") {
       { value: "single", label: "Influence — Single NPC" },
       { value: "multiple", label: "Influence — Multiple NPCs" },
       { value: "research", label: "Research" },
-      { value: "chase", label: "Chase" }
+      { value: "chase", label: "Chase" },
+      { value: "skill", label: "Skill Encounter" }
     ],
     typeHint: ""
   });
@@ -1581,9 +1701,9 @@ async function openCreateEncounterDialog(event, folderId = "") {
         const data = new foundry.applications.ux.FormDataExtended(button.form).object;
         const encounter = deepClone(DEFAULT_ENCOUNTER);
         encounter.id = randomID();
-        encounter.subsystemType = ["research", "chase"].includes(data.type) ? data.type : "influence";
-        encounter.name = data.name?.trim() || (encounter.subsystemType === "research" ? "New Research Encounter" : encounter.subsystemType === "chase" ? "New Chase" : "New Influence Encounter");
-        encounter.encounterType = ["multiple", "research", "chase"].includes(data.type) ? "multiple" : "single";
+        encounter.subsystemType = ["research", "chase", "skill"].includes(data.type) ? data.type : "influence";
+        encounter.name = data.name?.trim() || (encounter.subsystemType === "research" ? "New Research Encounter" : encounter.subsystemType === "chase" ? "New Chase" : encounter.subsystemType === "skill" ? "New Skill Encounter" : "New Influence Encounter");
+        encounter.encounterType = ["multiple", "research", "chase", "skill"].includes(data.type) ? "multiple" : "single";
         if (encounter.subsystemType === "research") {
           encounter.researchThresholds = [
             [2, "First Discovery"],
@@ -1597,6 +1717,13 @@ async function openCreateEncounterDialog(event, folderId = "") {
           encounter.discovery = [];
           encounter.influence = [];
           encounter.image = "icons/svg/wing.svg";
+        }
+        if (encounter.subsystemType === "skill") {
+          encounter.npcs = [{ id: randomID(), name: "General Challenge", image: "icons/svg/d20-black.svg", actorId: "", points: 0, maximumPoints: 0, availability: "available", requirements: "", background: "", discovery: [], influence: [], thresholds: [] }];
+          encounter.discovery = [];
+          encounter.influence = [];
+          encounter.image = "icons/svg/d20-black.svg";
+          encounter.roundLimit = 3;
         }
         encounter.folderId = data.folder || "";
         normalizeEncounterCollections(encounter);
@@ -1719,6 +1846,13 @@ async function activateEncounter(id) {
     encounter.actorsActed = {};
     encounter.chaseOutcome = "";
   }
+  if (encounter.subsystemType === "skill" && encounter.status === "draft") {
+    encounter.currentRound = 1;
+    encounter.skillPoints = 0;
+    encounter.skillOutcome = "";
+    encounter.actorsActed = {};
+    encounter.activeNpcId = encounter.npcs[0]?.id ?? "";
+  }
   encounter.status = "active";
   encounter.endedAt = null;
   encounter.presentationVisible = true;
@@ -1767,10 +1901,10 @@ async function duplicateEncounter(id) {
   while (names.has(name.toLowerCase())) name = `${source.name} (Copy ${copyNumber++})`;
   const duplicate = deepClone(source);
   Object.assign(duplicate, {
-    id: randomID(), name, status: "draft", currentPhase: 1, currentRound: 1, chaseOutcome: "", points: 0, researchPoints: 0,
+    id: randomID(), name, status: "draft", currentPhase: 1, currentRound: 1, chaseOutcome: "", skillOutcome: "", points: 0, researchPoints: 0, skillPoints: 0,
     opponentPosition: source.subsystemType === "chase" ? source.subjectStartPosition : source.opponentPosition,
     activeActorId: "", actorsActed: {}, phaseActions: {}, discoveries: {},
-    activeEffects: source.subsystemType === "chase" ? deepClone(source.activeEffects) : [], checkLog: [], pendingDiscoveries: [], pendingChecks: [], history: [], journalId: "", endedAt: null,
+    activeEffects: ["chase", "skill"].includes(source.subsystemType) ? deepClone(source.activeEffects) : [], checkLog: [], pendingDiscoveries: [], pendingChecks: [], history: [], journalId: "", endedAt: null,
     presentationVisible: true
   });
   duplicate.npcs.forEach((npc) => {
@@ -1835,7 +1969,8 @@ function importEncounterData() {
       normalizeEncounterCollections(imported);
       Object.assign(imported, {
         id: randomID(), name: uniqueEncounterName(imported.name), status: "draft",
-        currentPhase: 1, points: 0, participantIds: null, activeActorId: "", actorsActed: {}, phaseActions: {},
+        currentPhase: 1, currentRound: 1, points: 0, researchPoints: 0, skillPoints: 0,
+        chaseOutcome: "", skillOutcome: "", participantIds: null, activeActorId: "", actorsActed: {}, phaseActions: {},
         discoveries: {}, activeEffects: [], checkLog: [], history: [], journalId: "",
         endedAt: null, presentationVisible: true
       });
@@ -1907,14 +2042,14 @@ async function handleSidebarAction(event) {
   if (action === "select-participant" && !game.user.isGM) {
     const actor = game.actors.get(event.currentTarget.dataset.id);
     if (!encounterParticipants(encounter).some((participant) => participant.id === actor?.id) || !canUserControlActor(actor)) return ui.notifications.warn("You do not own that participating PC.");
-    if (encounter.actorsActed?.[actor.id]) return ui.notifications.info(`${actor.name} has already acted this ${encounter.subsystemType === "chase" ? "round" : encounter.subsystemType === "research" ? "research interval" : "phase"}.`);
+    if (encounter.actorsActed?.[actor.id]) return ui.notifications.info(`${actor.name} has already acted this ${["chase", "skill"].includes(encounter.subsystemType) ? "round" : encounter.subsystemType === "research" ? "research interval" : "phase"}.`);
     await setEncounterViewSelection(encounter, { actorId: actor.id });
     renderInfluenceSidebar();
     tracker?.render(false);
     return;
   }
   const selection = encounterViewSelection(encounter);
-  if (["discovery", "influence", "research", "chase"].includes(action)) return requestCheck(encounter, action, selection.actorId, selection.npcId);
+  if (["discovery", "influence", "research", "chase", "skill"].includes(action)) return requestCheck(encounter, action, selection.actorId, selection.npcId);
   if (action === "select-npc" && !game.user.isGM) {
     await setEncounterViewSelection(encounter, { npcId: event.currentTarget.dataset.id });
     renderInfluenceSidebar();
@@ -1976,6 +2111,7 @@ class EncounterManager extends Application {
     if (action === "peace-sample") return new EncounterEditor(deepClone(PEACE_TALKS)).render({ force: true });
     if (action === "research-sample") return new EncounterEditor(deepClone(RESEARCHING_THE_EIGHTH)).render({ force: true });
     if (action === "chase-sample") return new EncounterEditor(deepClone(WHERE_IS_THE_GOVERNOR)).render({ force: true });
+    if (action === "abeo-chase-sample") return new EncounterEditor(deepClone(ABEO_MARKET_CHASE)).render({ force: true });
     if (action === "edit") return new EncounterEditor(Store.get(id)).render({ force: true });
     if (action === "activate") {
       await activateEncounter(id);
@@ -1996,7 +2132,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this._dirty = false;
     this._forceClose = false;
   }
-  get title() { return `Encounter: ${this.encounter?.name || (this.encounter?.subsystemType === "research" ? "New Research Encounter" : this.encounter?.subsystemType === "chase" ? "New Chase" : "New Influence Encounter")}`; }
+  get title() { return `Encounter: ${this.encounter?.name || (this.encounter?.subsystemType === "research" ? "New Research Encounter" : this.encounter?.subsystemType === "chase" ? "New Chase" : this.encounter?.subsystemType === "skill" ? "New Skill Encounter" : "New Influence Encounter")}`; }
   static DEFAULT_OPTIONS = {
     id: "influence-encounter-editor",
     tag: "form",
@@ -2004,7 +2140,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     position: { width: 860, height: 780 },
     window: { icon: "fa-solid fa-comments", resizable: true, contentClasses: ["standard-form", "influence-editor"] },
     form: { closeOnSubmit: false, handler: EncounterEditor.#onSubmit },
-    actions: { add: EncounterEditor.#onAdd, remove: EncounterEditor.#onRemove, move: EncounterEditor.#onMove, parse: EncounterEditor.#onParse, unlink: EncounterEditor.#onUnlink }
+    actions: { add: EncounterEditor.#onAdd, remove: EncounterEditor.#onRemove, move: EncounterEditor.#onMove, parse: EncounterEditor.#onParse, parseChase: EncounterEditor.#onParseChase, unlink: EncounterEditor.#onUnlink }
   };
   static PARTS = {
     form: { template: `modules/${MODULE_ID}/templates/editor.hbs`, root: true, scrollable: [".content"] }
@@ -2024,6 +2160,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const context = await super._prepareContext(options);
     const isResearch = this.encounter.subsystemType === "research";
     const isChase = this.encounter.subsystemType === "chase";
+    const isSkill = this.encounter.subsystemType === "skill";
     const selected = new Set(Array.isArray(this.encounter.participantIds)
       ? this.encounter.participantIds
       : defaultPartyCharacters().map((actor) => actor.id));
@@ -2043,20 +2180,22 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       delete tabs.traits;
       tabs.results.label = "Discoveries";
       tabs.results.icon = "fa-solid fa-lightbulb";
-    } else if (isChase) {
+    } else if (isChase || isSkill) {
       tabs.traits.label = "Circumstances";
       tabs.traits.icon = "fa-solid fa-sliders";
       delete tabs.results;
-      tabs.skills.label = "Overcome Checks";
+      tabs.skills.label = isChase ? "Overcome Checks" : "Skill Checks";
     }
     return {
       ...context,
       encounter: encounterView,
       isResearch,
       isChase,
+      isSkill,
+      isChallenge: isChase || isSkill,
       progressClockAvailable: !!progressClockDatabase(),
       characterActors,
-      skillChoices: [...PF2E_SKILLS, ...(isChase ? PF2E_SAVES : []), ...PF2E_LORE_SKILLS, ...Object.keys(LORE_CATEGORIES)],
+      skillChoices: [...PF2E_SKILLS, ...((isChase || isSkill) ? PF2E_SAVES : []), ...PF2E_LORE_SKILLS, ...Object.keys(LORE_CATEGORIES)],
       tabs,
       modifierTypes: { circumstance: "Circumstance", status: "Status", item: "Item", untyped: "Untyped" },
       traitModes: { roll: "Roll modifier", dc: "DC adjustment", narrative: "Narrative only" },
@@ -2072,7 +2211,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       subjectTurnOrders: { before: "Before the party", after: "After the party" },
       dcVisibilities: { exact: "Exact DCs", relative: "Relative difficulty", hidden: "Hidden" },
       victorySplashModes: { automatic: "Automatic when the chase is won", manual: "Manual GM trigger after victory" },
-      npcTargets: { ...(isChase ? { "": "All obstacles" } : {}), ...Object.fromEntries(this.encounter.npcs.map((npc) => [npc.id, targetDisplayName(npc)])) }
+      npcTargets: { ...((isChase || isSkill) ? { "": isChase ? "All obstacles" : "All challenges" } : {}), ...Object.fromEntries(this.encounter.npcs.map((npc) => [npc.id, targetDisplayName(npc)])) }
     };
   }
   async _onRender(context, options) {
@@ -2294,6 +2433,20 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     ui.notifications.info(`Parsed ${npc.name}: ${found.join(", ")}. Review the generated fields before saving.`);
     await this.render({ force: true });
   }
+  static async #onParseChase() {
+    this._capture();
+    const source = this.element.querySelector("[data-chase-parser-source]")?.value?.trim();
+    if (!source) return ui.notifications.warn("Paste one or more published obstacle blocks before parsing.");
+    const parsed = parseChaseObstacles(source);
+    if (!parsed.obstacles.length) return ui.notifications.warn("No recognizable chase obstacles were found. Include each OBSTACLE heading, Chase Points, and Overcome DCs.");
+    this.encounter.npcs = parsed.obstacles;
+    this.encounter.phases = parsed.obstacles.length;
+    this.encounter.activeNpcId = parsed.obstacles[0].id;
+    if (parsed.level) this.encounter.level = parsed.level;
+    this._dirty = true;
+    ui.notifications.info(`Parsed ${parsed.obstacles.length} chase obstacle(s). Review the generated fields before saving.`);
+    await this.render({ force: true });
+  }
   static async #onUnlink(_event, target) {
     this._capture();
     const npc = this.encounter.npcs[Number(target.dataset.index)];
@@ -2309,13 +2462,14 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     if (kind === "npc") {
       const research = this.encounter.subsystemType === "research";
       const chase = this.encounter.subsystemType === "chase";
+      const skillEncounter = this.encounter.subsystemType === "skill";
       const firstChaseObstacle = chase && this.encounter.npcs.length === 0;
-      const created = { id: randomID(), name: research ? "New Research Source" : chase ? "New Obstacle" : "New Influence Target", image: research ? "icons/svg/book.svg" : chase ? "icons/svg/door-exit.svg" : "icons/svg/mystery-man.svg", actorId: "", points: 0,
+      const created = { id: randomID(), name: research ? "New Research Source" : chase ? "New Obstacle" : skillEncounter ? "New Challenge" : "New Influence Target", image: research ? "icons/svg/book.svg" : chase ? "icons/svg/door-exit.svg" : skillEncounter ? "icons/svg/d20-black.svg" : "icons/svg/mystery-man.svg", actorId: "", points: 0,
         maximumPoints: research ? 4 : chase ? 3 : 0, availability: "available", requirements: "", researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
-        background: "", appearance: "", personality: "", discovery: chase ? [] : deepClone(DEFAULT_ENCOUNTER.discovery.slice(0, 2)), influence: [], thresholds: [],
+        background: "", appearance: "", personality: "", discovery: (chase || skillEncounter) ? [] : deepClone(DEFAULT_ENCOUNTER.discovery.slice(0, 2)), influence: [], thresholds: [],
         weakness: { label: "Weakness", description: "", value: 0, type: "circumstance", mode: "dc" },
         strength: { label: "Resistance", description: "", value: 0, type: "circumstance", mode: "dc" } };
-      if (!research && !chase) created.discovery.forEach((skill) => { if (!skill.dcModified) skill.dc = automaticSkillDC(this.encounter, skill); });
+      if (!research && !chase && !skillEncounter) created.discovery.forEach((skill) => { if (!skill.dcModified) skill.dc = automaticSkillDC(this.encounter, skill); });
       this.encounter.npcs.push(created);
       if (!chase || firstChaseObstacle) this.encounter.activeNpcId = created.id;
     }
@@ -2324,14 +2478,14 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     if (kind === "threshold" && npc) npc.thresholds.push({ id: randomID(), points: 0, label: "", text: "", boons: [] });
     if (kind === "boon" && npc) npc.thresholds[Number(thresholdIndex)]?.boons.push({ id: randomID(), kind: "narrative", label: "New Reward", description: "", value: 0, type: "circumstance", mode: "narrative", scope: "both", skills: [], uses: 0, remaining: 0, activation: "automatic", active: true, applied: false, targetNpcId: npc.id, playerVisible: true });
     if (kind === "research-threshold") this.encounter.researchThresholds.push({ id: randomID(), points: 0, label: "New Discovery", text: "", boons: [] });
-    if (kind === "circumstance") this.encounter.activeEffects.push({ id: randomID(), kind: "modifier", label: "New Circumstance", description: "", value: 1, type: "circumstance", mode: "roll", scope: "chase", targetNpcId: "", skills: [], uses: 999, remaining: 999, activation: "manual" });
+    if (kind === "circumstance") this.encounter.activeEffects.push({ id: randomID(), kind: "modifier", label: "New Circumstance", description: "", value: 1, type: "circumstance", mode: "roll", scope: this.encounter.subsystemType, targetNpcId: "", skills: [], uses: 999, remaining: 999, activation: "manual" });
   }
   _remove(type, index) {
     const [kind, npcIndex, thresholdIndex] = type.split(":");
     const npc = this.encounter.npcs[Number(npcIndex)];
     if (kind === "npc") {
       if (this.encounter.npcs.length <= 1 && this.encounter.subsystemType !== "research") {
-        ui.notifications.warn("An influence encounter must have at least one target.");
+        ui.notifications.warn(this.encounter.subsystemType === "skill" ? "A skill encounter must have at least one challenge." : "An influence encounter must have at least one target.");
         return false;
       }
       this.encounter.npcs.splice(index, 1);
@@ -2361,7 +2515,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       this.encounter.id ||= randomID();
       this.encounter.phases = Number(this.encounter.phases) || 4;
       if (!this.encounter.npcs.length) {
-        ui.notifications.warn(`Add at least one ${this.encounter.subsystemType === "research" ? "Research Source" : this.encounter.subsystemType === "chase" ? "Obstacle" : "Influence Target"} before saving this encounter.`);
+        ui.notifications.warn(`Add at least one ${this.encounter.subsystemType === "research" ? "Research Source" : this.encounter.subsystemType === "chase" ? "Obstacle" : this.encounter.subsystemType === "skill" ? "Challenge" : "Influence Target"} before saving this encounter.`);
         return false;
       }
       this.encounter.npcs.forEach((npc, npcIndex) => {
@@ -2438,6 +2592,7 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
   const npc = encounter.npcs.find((entry) => entry.id === selectedNpcId) ?? encounter.npcs.find((entry) => entry.id === encounter.activeNpcId) ?? encounter.npcs[0];
   const isResearch = type === "research" || encounter.subsystemType === "research";
   const isChase = type === "chase" || encounter.subsystemType === "chase";
+  const isSkill = type === "skill" || encounter.subsystemType === "skill";
   if (!npc) return ui.notifications.warn(isResearch ? "Choose a research source first." : "Choose an influence target first.");
   if (isResearch && (npc.availability !== "available" || (npc.maximumPoints && npc.points >= npc.maximumPoints))) return ui.notifications.warn(`${npc.name} is not currently available for further research.`);
   const actor = (selectedActorId ? game.actors.get(selectedActorId) : null)
@@ -2451,7 +2606,7 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
     const state = researchActorState(npc, actor.id);
     return ui.notifications.warn(state.availability === "unavailable" ? `${npcName} is unavailable to ${actor.name}.` : `${actor.name} has exhausted the Research Points available from ${npcName}.`);
   }
-  if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this ${isResearch ? "research interval" : isChase ? "round" : "phase"}.`);
+  if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this ${isResearch ? "research interval" : (isChase || isSkill) ? "round" : "phase"}.`);
   let options = "";
   if (type === "discovery") {
     const perception = npc.discovery.find((skill) => skill.slug === "perception");
@@ -2463,11 +2618,11 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
     options = `${primary}<option disabled>──────────</option>${remaining}`;
   } else {
     const skills = availableSkillsForActor(actor, npc.influence);
-    if (!skills.length) return ui.notifications.warn(`${actor.name} has none of the configured ${isResearch ? "Research" : isChase ? "Overcome" : "Influence"} checks.`);
+    if (!skills.length) return ui.notifications.warn(`${actor.name} has none of the configured ${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : "Influence"} checks.`);
     options = skills.map((skill) => `<option value="configured:${skill.id}">${esc(skill.label)}</option>`).join("");
   }
   new Dialog({
-    title: `${isResearch ? "Research" : isChase ? "Overcome" : type.titleCase()} Check: ${npcName}`,
+    title: `${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : type.titleCase()} Check: ${npcName}`,
     content: `<form><p>${isResearch ? "Source" : "Target"}: <strong>${esc(npcName)}</strong></p>${isResearch && npc.requirements ? `<p class="hint"><strong>Requirements:</strong> ${esc(npc.requirements)}</p>` : ""}<div class="form-group"><label>Skill</label><select name="skill">${options}</select></div></form>`,
     buttons: { request: { icon: '<i class="fas fa-paper-plane"></i>', label: "Request Check", callback: (html) => {
       const selection = String(html.find('[name="skill"]').val());
@@ -2529,6 +2684,7 @@ async function enqueueCheckRequest(payload) {
   const actor = game.actors.get(payload.actorId);
   const npc = encounter?.npcs?.find((entry) => entry.id === payload.npcId);
   if (!encounter || encounter.status !== "active" || !actor || !npc) return ui.notifications.warn("That check request is no longer valid.");
+  if (encounter.skillOutcome || encounter.chaseOutcome) return ui.notifications.warn("That encounter has already concluded.");
   if (encounter.pendingChecks.some((entry) => entry.actorId === payload.actorId)) {
     game.socket.emit(SOCKET, { action: "check-request-status", userId: payload.requesterId, message: `${participantDisplayName(encounter, actor)} already has a check waiting for the GM.` });
     return;
@@ -2562,6 +2718,7 @@ async function adjudicate(request) {
   if (request.type === "chase" && (npc.id !== encounter.activeNpcId || npc.availability === "exhausted")) {
     return cancelPendingCheck(encounter.id, request.id, `${npcName} is no longer the active obstacle.`);
   }
+  if (request.type === "skill" && encounter.skillOutcome) return cancelPendingCheck(encounter.id, request.id, "The Skill Encounter has already concluded.");
   if (request.type === "research" && !researchSourceAvailableForActor(npc, actor.id)) {
     const state = researchActorState(npc, actor.id);
     return cancelPendingCheck(encounter.id, request.id, state.availability === "unavailable" ? `${npcName} is unavailable to ${actorName}.` : `${actorName} has exhausted the Research Points available from ${npcName}.`);
@@ -2591,10 +2748,10 @@ async function adjudicate(request) {
   const rows = mods.map((m) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${m.id}" ${m.id.startsWith("boon:") && m.activation === "automatic" ? "checked" : ""}> <strong>${esc(m.label)}</strong> ${signed(Number(m.value))} <small>${esc(m.description ?? "")}</small></label>`).join("");
   const invalidNotice = skill.invalidDiscovery ? `<p class="hint"><strong>GM:</strong> This is not a valid Discovery skill for this encounter. The blind roll consumes the character's action but cannot grant a Discovery.</p>` : "";
   const content = `<form class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></form>`;
-  const adjudicationContent = request.type === "research" ? content.replace(" influences ", " researches ") : request.type === "chase" ? content.replace(" influences ", " attempts ") : content;
+  const adjudicationContent = request.type === "research" ? content.replace(" influences ", " researches ") : request.type === "chase" ? content.replace(" influences ", " attempts ") : request.type === "skill" ? content.replace(" influences ", " tackles ") : content;
   adjudicationOpen = true;
   new Dialog({
-    title: `Adjudicate ${request.type === "research" ? "Research" : request.type === "chase" ? "Chase" : "Influence"} Check`, content: adjudicationContent,
+    title: `Adjudicate ${request.type === "research" ? "Research" : request.type === "chase" ? "Chase" : request.type === "skill" ? "Skill Encounter" : "Influence"} Check`, content: adjudicationContent,
     render: (html) => {
       const renderCustomMods = () => html.find(".custom-modifiers").html(customMods.map((mod) => `<div class="custom-modifier"><span><strong>${esc(mod.label)}</strong> ${signed(mod.value)} (${esc(mod.type)})${mod.persist ? " — kept" : ""}</span><button type="button" data-remove-custom="${mod.id}" title="Remove modifier"><i class="fas fa-times"></i></button></div>`).join(""));
       html.find('[data-action="add-custom"]').on("click", () => {
@@ -2666,8 +2823,8 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
   const points = request.type === "research"
     ? Number(npc.awards?.[["criticalFailure", "failure", "success", "criticalSuccess"][degree]] ?? 0)
-    : ["influence", "chase"].includes(request.type) ? ([ -1, 0, 1, 2 ][degree] ?? 0) : 0;
-  const previousPoints = request.type === "research" ? Number(encounter.researchPoints) : Number(npc.points);
+    : ["influence", "chase", "skill"].includes(request.type) ? ([ -1, 0, 1, 2 ][degree] ?? 0) : 0;
+  const previousPoints = request.type === "research" ? Number(encounter.researchPoints) : request.type === "skill" ? Number(encounter.skillPoints) : Number(npc.points);
   const newlyReachedInfluenceThresholds = request.type === "influence"
     ? npc.thresholds.filter((threshold) => threshold.points > previousPoints && threshold.points <= previousPoints + points)
     : [];
@@ -2682,9 +2839,20 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     encounter.pendingDiscoveries.push({ id: randomID(), logEntryId: logEntry.id, userId: request.requesterId, actorId: actor.id, npcId: npc.id, choices: degree === 3 ? 2 : 1 });
   }
   if (request.type === "influence") npc.points = Math.max(0, npc.points + points);
+  let skillWonNow = false;
+  if (request.type === "skill") {
+    encounter.skillPoints = Math.max(0, Math.min(encounter.skillPointGoal, Number(encounter.skillPoints) + points));
+    if (encounter.skillPoints >= encounter.skillPointGoal) {
+      encounter.skillOutcome = "victory";
+      skillWonNow = true;
+      logEntry.detailLabel = "Skill Encounter";
+      logEntry.details = [encounter.victoryText || "The party achieved its goal!"];
+    }
+  }
   let chaseWonNow = false;
   let chaseObstacleCompleted = false;
   let canceledChaseRequests = [];
+  let canceledSkillRequests = [];
   if (request.type === "chase") {
     npc.points = Math.max(0, Math.min(npc.maximumPoints, Number(npc.points) + points));
     if (npc.maximumPoints && npc.points >= npc.maximumPoints) {
@@ -2727,6 +2895,10 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   }
   encounter.actorsActed[actor.id] = true;
   encounter.pendingChecks = (encounter.pendingChecks ?? []).filter((entry) => entry.id !== request.id);
+  if (skillWonNow) {
+    canceledSkillRequests = [...encounter.pendingChecks];
+    encounter.pendingChecks = [];
+  }
   if (chaseObstacleCompleted) {
     canceledChaseRequests = encounter.pendingChecks.filter((entry) => entry.npcId === npc.id);
     encounter.pendingChecks = encounter.pendingChecks.filter((entry) => entry.npcId !== npc.id);
@@ -2744,6 +2916,8 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
       ? `${signed(encounter.researchPoints - previousPoints)} Research Point${Math.abs(encounter.researchPoints - previousPoints) === 1 ? "" : "s"}`
       : request.type === "chase"
         ? `${signed(points)} Chase Point${Math.abs(points) === 1 ? "" : "s"}`
+        : request.type === "skill"
+          ? `${signed(encounter.skillPoints - previousPoints)} Skill Point${Math.abs(encounter.skillPoints - previousPoints) === 1 ? "" : "s"}`
         : `${signed(points)} Influence Point${Math.abs(points) === 1 ? "" : "s"}`;
   if (request.type !== "discovery") {
     await ChatMessage.create({
@@ -2769,7 +2943,11 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
       await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-chase-progress"><strong>Chase Progress</strong><p>${esc(progressMessage)}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
     }
   }
+  if (skillWonNow) {
+    await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-reward"><strong>Skill Encounter Won</strong><p>${esc(encounter.victoryText || "The party achieved its goal!")}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+  }
   for (const canceled of canceledChaseRequests) await notifyPendingCheck(canceled, `${npcName} was overcome before this queued check could be adjudicated.`);
+  for (const canceled of canceledSkillRequests) await notifyPendingCheck(canceled, "The party reached the Skill Point goal before this queued check could be adjudicated.");
   if (chaseWonNow && encounter.victorySplashMode === "automatic") triggerVictorySplash(encounter);
   if (newlyReachedInfluenceThresholds.length) {
     const rewards = influenceRewardSections(newlyReachedInfluenceThresholds);

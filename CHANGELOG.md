@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-12
 
+- Added a whole-chase text parser for published obstacle headings, levels, Chase Points, shared DCs, Overcome options, and descriptions.
+- Added the six-obstacle `Abeo's Market Chase` sample as an editable chase template.
+- Added Skill Encounters as a fourth subsystem. Parties select from reusable challenges, make configured skill checks once per PC per round, and accumulate shared Skill Points before a configurable round limit; reaching the goal wins automatically, while finishing the final round short of the goal records failure.
+- Added Skill Encounter configuration, challenge artwork and descriptions, challenge-specific checks and circumstances, exact/relative/hidden DC presentation, manual SP controls, optional Global Progress Clock synchronization, player/GM tracker and sidebar support, chat outcomes, logging, pause/resume, duplication, and Journal publication.
 - Renamed the Chase action to “Roll to Overcome” in both the encounter window and sidebar.
 - Added PF2e-style outcome colors to subsystem result cards: green for critical success, blue for success, orange for failure, and red for critical failure.
 - Added a persistent, serialized GM check-request queue with duplicate prevention, explicit adjudicate/cancel controls, requester confirmations, and automatic cancellation of stale requests when another PC overcomes the obstacle.

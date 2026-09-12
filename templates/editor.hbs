@@ -21,6 +21,7 @@
           <div class="form-group"><label>Subject Image</label><div class="form-fields"><file-picker type="image" name="chaseSubject.image" value="{{encounter.chaseSubject.image}}"></file-picker></div></div>
         </fieldset>
         {{/if}}
+        {{#if isSkill}}<label>Situation and Stakes<textarea name="skillDescription" placeholder="Describe what the party is trying to accomplish and what is at stake.">{{encounter.skillDescription}}</textarea></label>{{/if}}
       </fieldset>
       <fieldset><legend>Encounter Configuration</legend>
         <div class="form-group"><label>Level</label><div class="form-fields"><input type="number" min="0" max="25" name="level" value="{{encounter.level}}"></div></div>
@@ -44,34 +45,41 @@
           <div class="form-group"><label>Display</label><div class="form-fields"><select name="victorySplashMode">{{selectOptions victorySplashModes selected=encounter.victorySplashMode}}</select></div></div>
         </fieldset>
         <label>Failure Outcome<textarea name="failureText">{{encounter.failureText}}</textarea></label>
+        {{else}}{{#if isSkill}}
+        <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><label>Round Limit</label><input type="number" min="1" name="roundLimit" value="{{encounter.roundLimit}}"></div></div>
+        <div class="form-group"><label>Skill Points</label><div class="form-fields"><input type="number" min="0" name="skillPoints" value="{{encounter.skillPoints}}"><label>Goal</label><input type="number" min="1" name="skillPointGoal" value="{{encounter.skillPointGoal}}"></div></div>
+        <div class="form-group"><label>DC Visibility</label><div class="form-fields"><select name="dcVisibility">{{selectOptions dcVisibilities selected=encounter.dcVisibility}}</select></div></div>
+        <label>Success Outcome<textarea name="victoryText">{{encounter.victoryText}}</textarea></label>
+        <label>Failure Outcome<textarea name="failureText">{{encounter.failureText}}</textarea></label>
         {{else}}
         <div class="form-group"><label>Phases</label><div class="form-fields"><input type="number" min="1" name="phases" value="{{encounter.phases}}"></div></div>
-        {{/if}}{{/if}}
-        <div class="form-group"><label>Global Progress Clocks</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="progressClock.enabled" {{checked encounter.progressClock.enabled}} {{#unless progressClockAvailable}}disabled{{/unless}}> {{#if isResearch}}Keep a persistent public RP tracker{{else}}Keep a persistent public IP tracker for each target{{/if}}</label></div></div>
+        {{/if}}{{/if}}{{/if}}
+        <div class="form-group"><label>Global Progress Clocks</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="progressClock.enabled" {{checked encounter.progressClock.enabled}} {{#unless progressClockAvailable}}disabled{{/unless}}> {{#if isResearch}}Keep a persistent public RP tracker{{else}}{{#if isSkill}}Keep a persistent public SP tracker{{else}}Keep a persistent public IP tracker for each target{{/if}}{{/if}}</label></div></div>
         {{#unless progressClockAvailable}}<p class="hint">Enable the optional Global Progress Clocks module to use this feature. Encounters work normally without it.</p>{{/unless}}
         <div class="form-group"><label>Show Exact Points to Players</label><div class="form-fields"><input type="checkbox" name="publicPoints" {{checked encounter.publicPoints}}></div></div>
       </fieldset>
+      {{#if isChase}}<section class="source-parser"><h3>Import Published Chase Text</h3><p class="hint">Paste one or more obstacle blocks containing an OBSTACLE heading, Chase Points, and Overcome DCs. Parsing replaces the current obstacle list; review the generated fields before saving.</p><textarea data-chase-parser-source placeholder="THROWN POWDER OBSTACLE 5&#10;Chase Points 5; Overcome DC 20 Acrobatics or Athletics...&#10;Obstacle description"></textarea><button type="button" data-action="parseChase"><i class="fa-solid fa-wand-magic-sparkles"></i> Parse Chase Obstacles</button></section>{{/if}}
       <fieldset><legend>Encounter Participants</legend>
         <p class="hint">Party characters are selected by default. Choose them below or drag character Actors from the sidebar and Tokens from the canvas.</p>
         <div class="actor-drop-zone" data-actor-drop="participant"><i class="fa-solid fa-user-plus"></i><strong>Drop participating PCs here</strong><span>Character Actors or Tokens</span></div>
         {{#if characterActors.length}}<div class="participant-picker">{{#each characterActors}}<div class="participant-choice"><input type="checkbox" name="partyParticipant" value="{{id}}" {{checked selected}}><img src="{{image}}" alt=""><div><strong>{{name}}</strong><input name="participantNicknames.{{id}}" value="{{nickname}}" placeholder="Optional nickname" aria-label="Nickname for {{name}}"></div></div>{{/each}}</div>{{else}}<p class="hint">No character actors are available in this world.</p>{{/if}}
       </fieldset>
-      <h2>{{#if isResearch}}Research Sources{{else}}{{#if isChase}}Ordered Obstacles{{else}}Influence Targets{{/if}}{{/if}}</h2>
-      <p class="hint">{{#if isResearch}}Add each book, witness, location, or other source the PCs can investigate. Drag Actors, Items, Journals, or Journal pages to reuse their existing names and images.{{else}}Drag Actors from the sidebar or Tokens from the canvas to populate names and images. Background and Personality are GM-only; Appearance is shown to players.{{/if}}</p>
-      {{#unless isChase}}<div class="actor-drop-zone" data-actor-drop="npc"><i class="fa-solid {{#if isResearch}}fa-book-open{{else}}fa-user-plus{{/if}}"></i><strong>Drop {{#if isResearch}}research sources{{else}}influence targets{{/if}} here</strong><span>{{#if isResearch}}Actor, Item, Journal, or Journal Page{{else}}Any Actor or Token{{/if}}</span></div>{{/unless}}
+      <h2>{{#if isResearch}}Research Sources{{else}}{{#if isChase}}Ordered Obstacles{{else}}{{#if isSkill}}Skill Challenges{{else}}Influence Targets{{/if}}{{/if}}{{/if}}</h2>
+      <p class="hint">{{#if isResearch}}Add each book, witness, location, or other source the PCs can investigate. Drag Actors, Items, Journals, or Journal pages to reuse their existing names and images.{{else}}{{#if isSkill}}Add one or more situations that offer different checks. Challenges remain available throughout the encounter and all successful checks contribute to the shared SP goal.{{else}}Drag Actors from the sidebar or Tokens from the canvas to populate names and images. Background and Personality are GM-only; Appearance is shown to players.{{/if}}{{/if}}</p>
+      {{#unless isChase}}{{#unless isSkill}}<div class="actor-drop-zone" data-actor-drop="npc"><i class="fa-solid {{#if isResearch}}fa-book-open{{else}}fa-user-plus{{/if}}"></i><strong>Drop {{#if isResearch}}research sources{{else}}influence targets{{/if}} here</strong><span>{{#if isResearch}}Actor, Item, Journal, or Journal Page{{else}}Any Actor or Token{{/if}}</span></div>{{/unless}}{{/unless}}
       {{#unless encounter.npcs.length}}<p class="hint empty-targets"><i class="fa-solid fa-circle-info"></i> This encounter has no {{#if isResearch}}sources{{else}}targets{{/if}} yet. Use the button below{{#unless isResearch}} or drop an NPC above{{/unless}}.</p>{{/unless}}
       {{#each encounter.npcs}}
       <fieldset class="npc-editor-card"><legend>{{name}}{{#if actorId}} <i class="fa-solid fa-link" title="Linked to a Foundry Actor"></i>{{/if}}</legend>
         {{#if @root.isChase}}<div class="chase-order-controls"><button type="button" data-action="move" data-index="{{@index}}" data-direction="-1" {{#if @first}}disabled{{/if}} title="Move obstacle earlier"><i class="fa-solid fa-arrow-up"></i></button><button type="button" data-action="move" data-index="{{@index}}" data-direction="1" {{#if @last}}disabled{{/if}} title="Move obstacle later"><i class="fa-solid fa-arrow-down"></i></button></div>{{/if}}
         <input type="hidden" name="npcs.{{@index}}.id" value="{{id}}"><input type="hidden" name="npcs.{{@index}}.actorId" value="{{actorId}}">
-        {{#unless @root.isResearch}}{{#unless @root.isChase}}
+        {{#unless @root.isResearch}}{{#unless @root.isChase}}{{#unless @root.isSkill}}
         <div class="actor-drop-zone target-link-drop-zone" data-actor-drop="link-target:{{@index}}"><i class="fa-solid fa-link"></i><strong>{{#if actorId}}Replace linked Actor{{else}}Link this target to an Actor{{/if}}</strong><span>Drop an Actor or Token here; configured mechanics are preserved</span></div>
         {{#if actorId}}<div class="linked-actor-status"><span><i class="fa-solid fa-circle-check"></i> Linked to {{name}}</span><button type="button" data-action="unlink" data-index="{{@index}}"><i class="fa-solid fa-link-slash"></i> Unlink</button></div>{{/if}}
-        {{/unless}}{{/unless}}
+        {{/unless}}{{/unless}}{{/unless}}
         <div class="form-group"><label>Name</label><div class="form-fields"><input name="npcs.{{@index}}.name" value="{{name}}"></div></div>
         <div class="form-group"><label>Nickname</label><div class="form-fields"><input name="npcs.{{@index}}.nickname" value="{{nickname}}" placeholder="Optional short display name"></div></div>
-        <div class="form-group"><label>{{#if @root.isChase}}Obstacle Image{{else}}Portrait{{/if}}</label><div class="form-fields"><file-picker type="image" name="npcs.{{@index}}.image" value="{{image}}"></file-picker></div></div>
-        <div class="form-group"><label>Current {{#if @root.isResearch}}Source RP{{else}}{{#if @root.isChase}}CP{{else}}IP{{/if}}{{/if}}</label><div class="form-fields"><input type="number" min="0" name="npcs.{{@index}}.points" value="{{points}}"></div></div>
+        <div class="form-group"><label>{{#if @root.isChase}}Obstacle Image{{else}}{{#if @root.isSkill}}Challenge Image{{else}}Portrait{{/if}}{{/if}}</label><div class="form-fields"><file-picker type="image" name="npcs.{{@index}}.image" value="{{image}}"></file-picker></div></div>
+        {{#unless @root.isSkill}}<div class="form-group"><label>Current {{#if @root.isResearch}}Source RP{{else}}{{#if @root.isChase}}CP{{else}}IP{{/if}}{{/if}}</label><div class="form-fields"><input type="number" min="0" name="npcs.{{@index}}.points" value="{{points}}"></div></div>{{/unless}}
         {{#if @root.isResearch}}<div class="form-group"><label>Maximum RP</label><div class="form-fields"><input type="number" min="0" name="npcs.{{@index}}.maximumPoints" value="{{maximumPoints}}"><select name="npcs.{{@index}}.availability">{{selectOptions @root.availabilityOptions selected=availability}}</select></div></div>
         <div class="form-group"><label>Maximum RP per PC</label><div class="form-fields"><input type="number" min="0" name="npcs.{{@index}}.maximumPointsPerActor" value="{{maximumPointsPerActor}}"><span class="units">0 = no personal limit</span></div></div>
         {{#if researchParticipantRows.length}}<div class="research-participant-ledger"><div class="research-participant-ledger-header"><strong>Participating PC</strong><strong>RP Generated</strong><strong>Source Access</strong></div>{{#each researchParticipantRows}}<div class="research-participant-ledger-row"><span><img src="{{image}}" alt="">{{name}}</span><input type="number" min="0" data-research-actor-points data-source-index="{{@../index}}" data-previous-value="{{points}}" name="npcs.{{@../index}}.researchByActor.{{id}}.points" value="{{points}}" aria-label="RP generated by {{name}}"><select name="npcs.{{@../index}}.researchByActor.{{id}}.availability" aria-label="Source availability for {{name}}">{{selectOptions @root.researchActorAvailabilityOptions selected=availability}}</select></div>{{/each}}</div>{{/if}}
@@ -83,43 +91,46 @@
         <div class="form-group"><label>Chase Points Required</label><div class="form-fields"><input type="number" min="1" name="npcs.{{@index}}.maximumPoints" value="{{maximumPoints}}"></div></div>
         <label>Obstacle Description<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
         <label>Special Rules / Conditional Bonuses<textarea name="npcs.{{@index}}.requirements">{{requirements}}</textarea></label>
+        {{else}}{{#if @root.isSkill}}
+        <label>Challenge Description<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
+        <label>Special Rules / Conditional Bonuses<textarea name="npcs.{{@index}}.requirements">{{requirements}}</textarea></label>
         {{else}}
         <label>Background<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
         <label>Appearance<textarea name="npcs.{{@index}}.appearance">{{appearance}}</textarea></label>
         <label>Personality<textarea name="npcs.{{@index}}.personality">{{personality}}</textarea></label>
-        {{/if}}{{/if}}
-        <button type="button" data-action="remove" data-type="npc" data-index="{{@index}}"><i class="fas fa-trash"></i> Remove {{#if @root.isResearch}}Source{{else}}{{#if @root.isChase}}Obstacle{{else}}Target{{/if}}{{/if}}</button>
+        {{/if}}{{/if}}{{/if}}
+        <button type="button" data-action="remove" data-type="npc" data-index="{{@index}}"><i class="fas fa-trash"></i> Remove {{#if @root.isResearch}}Source{{else}}{{#if @root.isChase}}Obstacle{{else}}{{#if @root.isSkill}}Challenge{{else}}Target{{/if}}{{/if}}{{/if}}</button>
       </fieldset>
       {{/each}}
-      <button type="button" data-action="add" data-type="npc"><i class="fas fa-plus"></i> Add {{#if isResearch}}Research Source{{else}}{{#if isChase}}Obstacle{{else}}Influence Target{{/if}}{{/if}}</button>
+      <button type="button" data-action="add" data-type="npc"><i class="fas fa-plus"></i> Add {{#if isResearch}}Research Source{{else}}{{#if isChase}}Obstacle{{else}}{{#if isSkill}}Challenge{{else}}Influence Target{{/if}}{{/if}}{{/if}}</button>
     </div>
 
     <div class="tab {{tabs.skills.cssClass}}" data-group="primary" data-tab="skills">
       <datalist id="influence-skill-choices">{{#each skillChoices}}<option value="{{this}}"></option>{{/each}}</datalist>
       {{#each encounter.npcs}}
       <fieldset class="npc-editor-card"><legend>{{name}}</legend>
-        {{#unless @root.isChase}}<section class="source-parser"><h3>Import Published Encounter Text</h3><p class="hint">{{#if @root.isResearch}}Paste a source block containing Maximum Research Points, Research Checks, Requirements, or Description.{{else}}Paste this target's Background, Appearance, Personality, Discovery/Influence DCs, Influence thresholds and rewards, Resistances/Strengths, or Weaknesses. Only recognized sections are replaced.{{/if}}</p><textarea data-parser-source="{{@index}}"></textarea><button type="button" data-action="parse" data-npc-index="{{@index}}"><i class="fa-solid fa-wand-magic-sparkles"></i> Parse Text for {{name}}</button></section>{{/unless}}
-        {{#unless @root.isResearch}}{{#unless @root.isChase}}
+        {{#unless @root.isChase}}{{#unless @root.isSkill}}<section class="source-parser"><h3>Import Published Encounter Text</h3><p class="hint">{{#if @root.isResearch}}Paste a source block containing Maximum Research Points, Research Checks, Requirements, or Description.{{else}}Paste this target's Background, Appearance, Personality, Discovery/Influence DCs, Influence thresholds and rewards, Resistances/Strengths, or Weaknesses. Only recognized sections are replaced.{{/if}}</p><textarea data-parser-source="{{@index}}"></textarea><button type="button" data-action="parse" data-npc-index="{{@index}}"><i class="fa-solid fa-wand-magic-sparkles"></i> Parse Text for {{name}}</button></section>{{/unless}}{{/unless}}
+        {{#unless @root.isResearch}}{{#unless @root.isChase}}{{#unless @root.isSkill}}
         <h3>Discovery Skills</h3>
         <p class="hint">Perception and Diplomacy are the defaults. Choose a standard skill or type a Lore or homebrew skill; its PF2e slug updates automatically and remains editable.</p>
         {{#each discovery}}<div class="skill-row"><input type="text" list="influence-skill-choices" data-skill-label name="npcs.{{@../index}}.discovery.{{@index}}.label" value="{{label}}" placeholder="Choose or type a skill"><input type="text" data-skill-slug name="npcs.{{@../index}}.discovery.{{@index}}.slug" value="{{slug}}" placeholder="PF2e slug"><input type="number" data-dc-input name="npcs.{{@../index}}.discovery.{{@index}}.dc" value="{{dc}}"><input type="hidden" data-dc-modified name="npcs.{{@../index}}.discovery.{{@index}}.dcModified" value="{{dcModified}}"><label><input type="checkbox" name="npcs.{{@../index}}.discovery.{{@index}}.secret" {{checked secret}}> Secret</label><input type="hidden" name="npcs.{{@../index}}.discovery.{{@index}}.id" value="{{id}}"><button type="button" data-action="remove" data-type="discovery:{{@../index}}" data-index="{{@index}}"><i class="fas fa-trash"></i></button></div>{{/each}}
         <button type="button" data-action="add" data-type="discovery:{{@index}}"><i class="fas fa-plus"></i> Add Discovery Skill</button>
-        {{/unless}}{{/unless}}<h3>{{#if @root.isResearch}}Research Checks{{else}}{{#if @root.isChase}}Overcome Checks{{else}}Influence Skills{{/if}}{{/if}}</h3>
+        {{/unless}}{{/unless}}{{/unless}}<h3>{{#if @root.isResearch}}Research Checks{{else}}{{#if @root.isChase}}Overcome Checks{{else}}{{#if @root.isSkill}}Skill Checks{{else}}Influence Skills{{/if}}{{/if}}{{/if}}</h3>
         {{#each influence}}<div class="skill-row"><input type="text" list="influence-skill-choices" data-skill-label name="npcs.{{@../index}}.influence.{{@index}}.label" value="{{label}}" placeholder="Choose or type a skill"><input type="text" data-skill-slug name="npcs.{{@../index}}.influence.{{@index}}.slug" value="{{slug}}" placeholder="PF2e slug"><input type="number" data-dc-input name="npcs.{{@../index}}.influence.{{@index}}.dc" value="{{dc}}"><input type="hidden" data-dc-modified name="npcs.{{@../index}}.influence.{{@index}}.dcModified" value="{{dcModified}}"><label><input type="checkbox" name="npcs.{{@../index}}.influence.{{@index}}.lore" {{checked lore}}> Lore</label><input type="hidden" name="npcs.{{@../index}}.influence.{{@index}}.id" value="{{id}}"><button type="button" data-action="remove" data-type="influence:{{@../index}}" data-index="{{@index}}"><i class="fas fa-trash"></i></button></div>{{/each}}
-        <button type="button" data-action="add" data-type="influence:{{@index}}"><i class="fas fa-plus"></i> Add {{#if @root.isResearch}}Research Check{{else}}{{#if @root.isChase}}Overcome Check{{else}}Influence Skill{{/if}}{{/if}}</button>
+        <button type="button" data-action="add" data-type="influence:{{@index}}"><i class="fas fa-plus"></i> Add {{#if @root.isResearch}}Research Check{{else}}{{#if @root.isChase}}Overcome Check{{else}}{{#if @root.isSkill}}Skill Check{{else}}Influence Skill{{/if}}{{/if}}{{/if}}</button>
       </fieldset>
       {{/each}}
     </div>
 
     {{#unless isResearch}}
     <div class="tab {{tabs.traits.cssClass}}" data-group="primary" data-tab="traits">
-      {{#if isChase}}
-      <p class="hint">Add bonuses or penalties that may apply throughout the chase or only at one obstacle. The GM chooses applicable circumstances when confirming each roll.</p>
+      {{#if isChallenge}}
+      <p class="hint">Add bonuses or penalties that may apply throughout the encounter or only to one {{#if isChase}}obstacle{{else}}challenge{{/if}}. The GM chooses applicable circumstances when confirming each roll.</p>
       {{#each encounter.activeEffects}}
       <fieldset class="threshold-editor"><legend>{{label}}</legend>
         <input type="hidden" name="activeEffects.{{@index}}.id" value="{{id}}">
         <input type="hidden" name="activeEffects.{{@index}}.kind" value="modifier">
-        <input type="hidden" name="activeEffects.{{@index}}.scope" value="chase">
+        <input type="hidden" name="activeEffects.{{@index}}.scope" value="{{@root.encounter.subsystemType}}">
         <input type="hidden" name="activeEffects.{{@index}}.activation" value="manual">
         <input type="hidden" name="activeEffects.{{@index}}.uses" value="999">
         <input type="hidden" name="activeEffects.{{@index}}.remaining" value="999">
