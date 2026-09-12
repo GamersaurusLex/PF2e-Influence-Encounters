@@ -12,7 +12,7 @@ https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/latest/down
 
 ## Features
 
-- Skill Encounters with a shared point goal, configurable round limit, reusable challenges, and automatic success or failure outcomes
+- Skill Encounters with shared or per-PC scoring, automatic point goals or GM-decided outcomes, configurable round limits, and reusable challenges
 - World-scoped encounter builder and reusable encounter records
 - Independent per-NPC Influence Points, Discovery and Influence skills, DCs, weaknesses, resistances, thresholds, and rewards
 - Player check requests with no written-response field

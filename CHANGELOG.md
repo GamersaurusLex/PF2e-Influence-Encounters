@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0 — 2026-09-12
+
+- Added shared-pool and individual-PC scoring modes for Skill Encounters, including editable scores, per-PC roll awards, tracker/sidebar display, undo, duplication resets, and Journal summaries.
+- Added a GM Decides victory mode that removes the automatic point threshold and provides GM controls to declare success or failure manually.
+
 ## 0.5.1 — 2026-09-12
 
 - Fixed Chase subject positions falling back to the first obstacle when older or restored state lacked a runtime position.

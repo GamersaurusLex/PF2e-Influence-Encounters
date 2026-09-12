@@ -144,6 +144,7 @@
 .chase-relative-status { font-style: italic; color: var(--color-text-light-highlight, #ddd); }
 .research-participant-ledger { display: grid; gap: .3rem; margin: .65rem 0; }
 .research-participant-ledger-header, .research-participant-ledger-row { display: grid; grid-template-columns: minmax(180px, 1fr) 110px minmax(150px, .8fr); gap: .5rem; align-items: center; }
+.skill-score-ledger .research-participant-ledger-header, .skill-score-ledger .research-participant-ledger-row { grid-template-columns: minmax(180px, 1fr) 110px; }
 .research-participant-ledger-header { padding: 0 .35rem; font-size: .85rem; opacity: .8; }
 .research-participant-ledger-row { padding: .35rem; border: 1px solid var(--color-border-light-2, #777); border-radius: 5px; }
 .research-participant-ledger-row > span { display: flex; align-items: center; gap: .45rem; min-width: 0; }

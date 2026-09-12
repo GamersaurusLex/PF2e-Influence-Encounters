@@ -249,6 +249,12 @@ function normalizeEncounterCollections(encounter) {
   encounter.chaseOutcome = ["victory", "failure"].includes(encounter.chaseOutcome) ? encounter.chaseOutcome : "";
   encounter.skillPoints = Math.max(0, Number(encounter.skillPoints) || 0);
   encounter.skillPointGoal = Math.max(1, Number(encounter.skillPointGoal) || 8);
+  encounter.skillScoringMode = encounter.skillScoringMode === "individual" ? "individual" : "shared";
+  encounter.skillVictoryMode = encounter.skillVictoryMode === "gm" ? "gm" : "goal";
+  encounter.skillPointsByActor = encounter.skillPointsByActor && typeof encounter.skillPointsByActor === "object" ? encounter.skillPointsByActor : {};
+  for (const [actorId, points] of Object.entries(encounter.skillPointsByActor)) encounter.skillPointsByActor[actorId] = Math.max(0, Number(points) || 0);
+  if (encounter.skillScoringMode === "individual") encounter.skillPoints = Object.values(encounter.skillPointsByActor).reduce((total, points) => total + points, 0);
+  encounter.skillWinnerActorId ??= "";
   encounter.skillOutcome = ["victory", "failure"].includes(encounter.skillOutcome) ? encounter.skillOutcome : "";
   encounter.skillDescription ??= "";
   encounter.chaseDescription ??= "";
@@ -398,6 +404,10 @@ const DEFAULT_ENCOUNTER = {
   researchPoints: 0,
   skillPoints: 0,
   skillPointGoal: 8,
+  skillScoringMode: "shared",
+  skillVictoryMode: "goal",
+  skillPointsByActor: {},
+  skillWinnerActorId: "",
   skillOutcome: "",
   skillDescription: "",
   researchThresholds: [],
@@ -746,7 +756,8 @@ async function removeEncounterProgressClocks(encounter) {
 async function syncEncounterProgressClocks(encounter) {
   const database = progressClockDatabase();
   if (!database) return;
-  const shouldDisplay = encounter.progressClock?.enabled && ["active", "paused"].includes(encounter.status);
+  const unsupportedSkillClock = encounter.subsystemType === "skill" && (encounter.skillScoringMode === "individual" || encounter.skillVictoryMode === "gm");
+  const shouldDisplay = encounter.progressClock?.enabled && !unsupportedSkillClock && ["active", "paused"].includes(encounter.status);
   if (!shouldDisplay) return removeEncounterProgressClocks(encounter);
   const clocks = [];
   if (["research", "skill"].includes(encounter.subsystemType)) {
@@ -871,6 +882,9 @@ function publicEncounterHtml(encounter) {
   const research = encounter.subsystemType === "research";
   const chase = encounter.subsystemType === "chase";
   const skillEncounter = encounter.subsystemType === "skill";
+  const skillScores = skillEncounter && encounter.skillScoringMode === "individual"
+    ? `<section><h2>Individual Scores</h2><ul>${encounterParticipants(encounter).map((actor) => `<li><strong>${esc(participantDisplayName(encounter, actor))}</strong> — ${skillActorPoints(encounter, actor.id)} SP</li>`).join("")}</ul></section>`
+    : "";
   const results = skillEncounter ? encounter.npcs.map((challenge) => `<section><h3>${esc(targetDisplayName(challenge))}</h3>${challenge.background ? `<p>${esc(challenge.background)}</p>` : ""}</section>`).join("") : chase ? encounter.npcs.map((obstacle) => `<section><h3>${esc(targetDisplayName(obstacle))} — ${obstacle.points}/${obstacle.maximumPoints} CP</h3>${obstacle.background ? `<p>${esc(obstacle.background)}</p>` : ""}</section>`).join("") : research ? encounter.npcs.filter((source) => source.availability !== "hidden").map((source) =>
     `<section><h3>${esc(targetDisplayName(source))}${encounter.publicPoints ? ` — ${source.points}${source.maximumPoints ? `/${source.maximumPoints}` : ""} RP` : ""}</h3>${source.background ? `<p>${esc(source.background)}</p>` : ""}</section>`).join("") : encounter.npcs.map((npc) => {
     const reached = npc.thresholds.filter((threshold) => npc.points >= threshold.points);
@@ -884,7 +898,10 @@ function publicEncounterHtml(encounter) {
   }).join("");
   const status = encounter.endedAt ? "Completed" : encounter.status === "paused" ? "Paused" : "In Progress";
   const discoveries = research ? encounter.researchThresholds.filter((threshold) => threshold.points <= encounter.researchPoints).map((threshold) => `<article><h4>${esc(threshold.label)} — ${threshold.points} RP</h4><p>${esc(threshold.text)}</p></article>`).join("") : "";
-  return `<article class="influence-encounter-archive"><h1>${esc(encounter.name)}</h1><p><strong>${status}</strong> · ${research ? `${encounter.researchPoints} RP · ${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : skillEncounter ? `${encounter.skillPoints}/${encounter.skillPointGoal} SP · Round ${encounter.currentRound}${encounter.roundLimit ? `/${encounter.roundLimit}` : ""}` : chase ? `Round ${encounter.currentRound}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p><section><h2>${research ? "Sources" : skillEncounter ? "Challenges" : chase ? "Obstacles" : "Targets and Results"}</h2>${results}</section>${research ? `<section><h2>Discoveries</h2>${discoveries}</section>` : ""}<section><h2>Check Log</h2>${rows ? `<table><thead><tr><th>PC</th><th>Target</th><th>Check</th><th>Skill</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table>` : "<p>No checks have been completed.</p>"}</section></article>`;
+  const skillStatus = encounter.skillScoringMode === "individual"
+    ? `${encounter.skillVictoryMode === "goal" ? `Individual goal ${encounter.skillPointGoal} SP` : "GM-decided outcome"} · Round ${encounter.currentRound}${encounter.roundLimit ? `/${encounter.roundLimit}` : ""}`
+    : `${encounter.skillPoints}${encounter.skillVictoryMode === "goal" ? `/${encounter.skillPointGoal}` : ""} SP · Round ${encounter.currentRound}${encounter.roundLimit ? `/${encounter.roundLimit}` : ""}`;
+  return `<article class="influence-encounter-archive"><h1>${esc(encounter.name)}</h1><p><strong>${status}</strong> · ${research ? `${encounter.researchPoints} RP · ${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : skillEncounter ? skillStatus : chase ? `Round ${encounter.currentRound}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p><section><h2>${research ? "Sources" : skillEncounter ? "Challenges" : chase ? "Obstacles" : "Targets and Results"}</h2>${results}</section>${skillScores}${research ? `<section><h2>Discoveries</h2>${discoveries}</section>` : ""}<section><h2>Check Log</h2>${rows ? `<table><thead><tr><th>PC</th><th>Target</th><th>Check</th><th>Skill</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table>` : "<p>No checks have been completed.</p>"}</section></article>`;
 }
 
 function encounterJournalName(encounter) {
@@ -926,6 +943,18 @@ function snapshot(encounter, label) {
   encounter.history ??= [];
   encounter.history.push({ id: randomID(), at: Date.now(), label, state: copy });
   if (encounter.history.length > 50) encounter.history.shift();
+}
+
+function skillActorPoints(encounter, actorId) {
+  return Math.max(0, Number(encounter?.skillPointsByActor?.[actorId]) || 0);
+}
+
+function skillScoreSummary(encounter) {
+  if (encounter.skillScoringMode !== "individual") {
+    return `The party has ${encounter.skillPoints}${encounter.skillVictoryMode === "goal" ? ` of ${encounter.skillPointGoal}` : ""} Skill Points.`;
+  }
+  const scores = encounterParticipants(encounter).map((actor) => `${participantDisplayName(encounter, actor)}: ${skillActorPoints(encounter, actor.id)} SP`);
+  return scores.length ? scores.join(" — ") : "No individual scores have been recorded.";
 }
 
 function folderPartyCharacters() {
@@ -1107,7 +1136,7 @@ class InfluenceTracker extends Application {
     const participants = encounterParticipants(encounter);
     if (encounter && !participants.some((actor) => actor.id === encounter.activeActorId)) encounter.activeActorId = "";
     const selection = encounterViewSelection(encounter);
-    const actors = participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter?.actorsActed?.[actor.id] }));
+    const actors = participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter?.actorsActed?.[actor.id], skillPoints: isSkill ? skillActorPoints(encounter, actor.id) : 0 }));
     const controlledActors = actors.filter((entry) => game.user.isGM || canUserControlActor(game.actors.get(entry.id)))
       .map((entry) => ({ ...entry, selected: entry.id === selection.actorId }));
     const activeObstacleIndex = isChase ? Math.max(0, encounter.npcs.findIndex((npc) => npc.id === encounter.activeNpcId)) : -1;
@@ -1118,7 +1147,9 @@ class InfluenceTracker extends Application {
     const activeResearchState = isResearch && activeNpcRecord && selection.actorId ? researchActorState(activeNpcRecord, selection.actorId) : null;
     const activeNpc = activeNpcRecord ? { ...activeNpcRecord, name: targetDisplayName(activeNpcRecord), researchActorState: activeResearchState } : null;
     const thresholdSource = isResearch ? (encounter?.researchThresholds ?? []) : (isChase || isSkill) ? [] : (activeNpcRecord?.thresholds ?? []);
-    const currentPoints = isResearch ? Number(encounter?.researchPoints) : isSkill ? Number(encounter?.skillPoints) : Number(activeNpcRecord?.points);
+    const individualSkillScoring = isSkill && encounter.skillScoringMode === "individual";
+    const goalBasedSkillEncounter = isSkill && encounter.skillVictoryMode === "goal";
+    const currentPoints = isResearch ? Number(encounter?.researchPoints) : isSkill ? (individualSkillScoring ? skillActorPoints(encounter, selection.actorId) : Number(encounter?.skillPoints)) : Number(activeNpcRecord?.points);
     const thresholds = thresholdSource.map((threshold) => ({
       ...threshold,
       unlocked: currentPoints >= threshold.points,
@@ -1151,7 +1182,7 @@ class InfluenceTracker extends Application {
       return { ...skill, dcText };
     }) : [];
     const sourceAvailable = isChase ? activeNpc?.availability !== "exhausted" : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, isResearch, isChase, isSkill, obscureChaseCourse, chaseSubjectStatus,
+    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, isResearch, isChase, isSkill, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus,
       researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
       pointLabel: isResearch ? "RP" : isChase ? "CP" : isSkill ? "SP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : isSkill ? "Skill Challenges" : "Influence Targets",
       actionLabel: isResearch ? "Research" : (isChase || isSkill) ? "Make a Check" : "Influence", currentPoints,
@@ -1167,10 +1198,11 @@ class InfluenceTracker extends Application {
       canAct: !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !encounter.skillOutcome && !!selection.actorId && sourceAvailable,
       canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused",
       canTriggerVictorySplash: game.user.isGM && isChase && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual",
+      canDeclareSkillOutcome: game.user.isGM && isSkill && encounter?.skillVictoryMode === "gm" && encounter?.status === "active" && !encounter?.skillOutcome,
       canPrior: !isResearch && !isChase && encounter?.status === "active" && (encounter?.currentPhase ?? 1) > 1,
       canNext: !isResearch && !isChase && encounter?.status === "active" && (encounter?.currentPhase ?? 1) < (encounter?.phases ?? 1),
-      canNextRound: (isChase || isSkill) && encounter?.status === "active" && !encounter?.chaseOutcome && !encounter?.skillOutcome,
-      roundActionLabel: isSkill && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : "Next Round" };
+      canNextRound: (isChase || isSkill) && encounter?.status === "active" && !encounter?.chaseOutcome && !encounter?.skillOutcome && !(isSkill && encounter.skillVictoryMode === "gm" && encounter.roundLimit && encounter.currentRound >= encounter.roundLimit),
+      roundActionLabel: isSkill && encounter?.skillVictoryMode === "goal" && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : "Next Round" };
   }
   activateListeners(html) {
     super.activateListeners(html);
@@ -1235,8 +1267,13 @@ class InfluenceTracker extends Application {
       if (encounter.subsystemType === "skill") {
         if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before ending the round.");
         snapshot(encounter, "Finish skill encounter round");
-        if (encounter.roundLimit && encounter.currentRound >= encounter.roundLimit) {
-          encounter.skillOutcome = encounter.skillPoints >= encounter.skillPointGoal ? "victory" : "failure";
+        if (encounter.skillVictoryMode === "goal" && encounter.roundLimit && encounter.currentRound >= encounter.roundLimit) {
+          const leadingScore = Math.max(0, ...Object.values(encounter.skillPointsByActor).map(Number));
+          const goalReached = encounter.skillScoringMode === "individual" ? leadingScore >= encounter.skillPointGoal : encounter.skillPoints >= encounter.skillPointGoal;
+          encounter.skillOutcome = goalReached ? "victory" : "failure";
+          if (goalReached && encounter.skillScoringMode === "individual") {
+            encounter.skillWinnerActorId = Object.entries(encounter.skillPointsByActor).find(([, score]) => Number(score) >= encounter.skillPointGoal)?.[0] ?? "";
+          }
           await ChatMessage.create({
             content: `<div class="influence-chat influence-result ${encounter.skillOutcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${encounter.skillOutcome === "victory" ? "Skill Encounter Won" : "Skill Encounter Failed"}</strong><p>${esc(encounter.skillOutcome === "victory" ? (encounter.victoryText || "The party achieved its goal!") : (encounter.failureText || "The party ran out of time."))}</p></div>`,
             style: CONST.CHAT_MESSAGE_STYLES.OOC,
@@ -1245,7 +1282,7 @@ class InfluenceTracker extends Application {
         } else {
           encounter.currentRound += 1;
           encounter.actorsActed = {};
-          await ChatMessage.create({ content: `<div class="influence-chat influence-result"><strong>Round ${encounter.currentRound}</strong><p>The party has ${encounter.skillPoints} of ${encounter.skillPointGoal} Skill Points.</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+          await ChatMessage.create({ content: `<div class="influence-chat influence-result"><strong>Round ${encounter.currentRound}</strong><p>${esc(skillScoreSummary(encounter))}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
         }
       } else {
       snapshot(encounter, "Next chase round");
@@ -1293,10 +1330,17 @@ class InfluenceTracker extends Application {
       const research = encounter.subsystemType === "research";
       const chase = encounter.subsystemType === "chase";
       const skillEncounter = encounter.subsystemType === "skill";
-      const value = await promptNumber(research ? "Adjust Research Points" : skillEncounter ? "Adjust Skill Points" : chase ? `Adjust Chase Points: ${targetDisplayName(npc)}` : `Adjust Influence Points: ${targetDisplayName(npc)}`, research ? encounter.researchPoints : skillEncounter ? encounter.skillPoints : npc.points);
+      const selectedActorId = encounterViewSelection(encounter).actorId;
+      const individualSkill = skillEncounter && encounter.skillScoringMode === "individual";
+      if (individualSkill && !selectedActorId) return ui.notifications.warn("Choose a participating PC before adjusting an individual score.");
+      const value = await promptNumber(research ? "Adjust Research Points" : individualSkill ? `Adjust Skill Points: ${participantDisplayName(encounter, game.actors.get(selectedActorId))}` : skillEncounter ? "Adjust Skill Points" : chase ? `Adjust Chase Points: ${targetDisplayName(npc)}` : `Adjust Influence Points: ${targetDisplayName(npc)}`, research ? encounter.researchPoints : individualSkill ? skillActorPoints(encounter, selectedActorId) : skillEncounter ? encounter.skillPoints : npc.points);
       if (value === null) return;
       snapshot(encounter, action);
-      if (research) encounter.researchPoints = Math.max(0, value); else if (skillEncounter) encounter.skillPoints = Math.max(0, value); else npc.points = Math.max(0, value);
+      if (research) encounter.researchPoints = Math.max(0, value);
+      else if (individualSkill) {
+        encounter.skillPointsByActor[selectedActorId] = Math.max(0, value);
+        encounter.skillPoints = Object.values(encounter.skillPointsByActor).reduce((total, points) => total + Number(points || 0), 0);
+      } else if (skillEncounter) encounter.skillPoints = Math.max(0, value); else npc.points = Math.max(0, value);
     } else if (action === "change-ip") {
       const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
       const delta = Number(event.currentTarget.dataset.delta);
@@ -1304,9 +1348,18 @@ class InfluenceTracker extends Application {
       const research = encounter.subsystemType === "research";
       const chase = encounter.subsystemType === "chase";
       const skillEncounter = encounter.subsystemType === "skill";
+      const individualActorId = skillEncounter && encounter.skillScoringMode === "individual"
+        ? encounterViewSelection(encounter).actorId
+        : "";
+      if (skillEncounter && encounter.skillScoringMode === "individual" && !individualActorId) {
+        return ui.notifications.warn("Choose a participating PC before adjusting an individual score.");
+      }
       snapshot(encounter, research ? `${signed(delta)} RP` : skillEncounter ? `${signed(delta)} SP` : `${targetDisplayName(npc)}: ${signed(delta)} ${chase ? "CP" : "IP"}`);
       if (research) encounter.researchPoints = Math.max(0, Number(encounter.researchPoints) + delta);
-      else if (skillEncounter) encounter.skillPoints = Math.max(0, Number(encounter.skillPoints) + delta);
+      else if (skillEncounter && encounter.skillScoringMode === "individual") {
+        encounter.skillPointsByActor[individualActorId] = Math.max(0, skillActorPoints(encounter, individualActorId) + delta);
+        encounter.skillPoints = Object.values(encounter.skillPointsByActor).reduce((total, points) => total + Number(points || 0), 0);
+      } else if (skillEncounter) encounter.skillPoints = Math.max(0, Number(encounter.skillPoints) + delta);
       else npc.points = Math.max(0, Number(npc.points) + delta);
     } else if (action === "apply-reward") {
       const boon = findBoon(encounter, event.currentTarget.dataset.id);
@@ -1318,6 +1371,15 @@ class InfluenceTracker extends Application {
     } else if (action === "reset-actions") {
       snapshot(encounter, action);
       encounter.actorsActed = {};
+    } else if (action === "declare-skill-outcome") {
+      if (encounter.subsystemType !== "skill" || encounter.skillVictoryMode !== "gm") return;
+      if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before declaring the outcome.");
+      const outcome = event.currentTarget.dataset.outcome;
+      if (!['victory', 'failure'].includes(outcome)) return;
+      snapshot(encounter, `Declare ${outcome}`);
+      encounter.skillOutcome = outcome;
+      encounter.skillWinnerActorId = "";
+      await ChatMessage.create({ content: `<div class="influence-chat influence-result ${outcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${outcome === "victory" ? "Skill Encounter Outcome" : "Skill Encounter Failed"}</strong><p>${esc(outcome === "victory" ? (encounter.victoryText || "The GM determined the outcome.") : (encounter.failureText || "The GM determined the encounter was unsuccessful."))}</p>${encounter.skillScoringMode === "individual" ? `<p>${esc(skillScoreSummary(encounter))}</p>` : ""}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
     } else if (action === "end-encounter") {
       if (!await Dialog.confirm({ title: "End Encounter", content: "<p>End this encounter and make its Journal record available to players?</p>" })) return;
       snapshot(encounter, action);
@@ -1466,7 +1528,8 @@ function renderInfluenceSidebar() {
       const acted = !!encounter.actorsActed?.[actor.id];
       const owned = canUserControlActor(actor);
       const selected = actor.id === selection.actorId;
-      const contents = `<img src="${esc(participantPortrait(actor))}" alt=""><span>${esc(participantDisplayName(encounter, actor))}</span><i class="fa-solid ${acted ? "fa-check" : "fa-hourglass"}" title="${acted ? "Acted this round" : "Has not acted"}"></i>`;
+      const score = skillEncounter && encounter.skillScoringMode === "individual" && encounter.publicPoints ? ` <small>${skillActorPoints(encounter, actor.id)} SP</small>` : "";
+      const contents = `<img src="${esc(participantPortrait(actor))}" alt=""><span>${esc(participantDisplayName(encounter, actor))}${score}</span><i class="fa-solid ${acted ? "fa-check" : "fa-hourglass"}" title="${acted ? "Acted this round" : "Has not acted"}"></i>`;
       return owned
         ? `<button type="button" data-influence-action="select-participant" data-id="${actor.id}" class="influence-sidebar-person ${acted ? "acted" : ""} ${selected ? "selected" : ""}" ${acted ? "disabled" : ""} title="${acted ? "This PC has already acted" : `Act as ${esc(participantDisplayName(encounter, actor))}`}">${contents}</button>`
         : `<div class="influence-sidebar-person ${acted ? "acted" : ""}">${contents}</div>`;
@@ -1482,12 +1545,13 @@ function renderInfluenceSidebar() {
       return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-influence-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${subjectMarker}${research ? `${sourceStatus}${actorStatus}` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
     }).join("");
     const activeNpc = visibleSources.find((npc) => npc.id === selection.npcId) ?? visibleSources[0];
-    const points = research ? encounter.researchPoints : skillEncounter ? encounter.skillPoints : activeNpc?.points ?? 0;
+    const points = research ? encounter.researchPoints : skillEncounter && encounter.skillScoringMode === "individual" ? skillActorPoints(encounter, selection.actorId) : skillEncounter ? encounter.skillPoints : activeNpc?.points ?? 0;
     const pointLabel = research ? "RP" : chase ? "CP" : skillEncounter ? "SP" : "IP";
     const researchDisabled = research && !researchSourceAvailableForActor(activeNpc, selection.actorId) ? " disabled" : "";
     const actions = research ? `<button data-influence-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-influence-action="chase"><i class="fa-solid fa-person-running"></i> Roll to Overcome</button>' : skillEncounter ? '<button data-influence-action="skill"><i class="fa-solid fa-dice-d20"></i> Make a Check</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
     const chaseStatus = obscureChaseCourse ? `<p class="chase-relative-status">The ${esc(encounter.chaseSubject?.label || "Subject")} is ${encounter.chaseType === "run-away" || /pursuer/i.test(encounter.chaseSubject?.label || "") ? "behind you" : "ahead of you"}.</p>` : "";
-    panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : (chase || skillEncounter) ? `Round ${encounter.currentRound}${skillEncounter && encounter.roundLimit ? ` of ${encounter.roundLimit}` : ""}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : skillEncounter ? `/${encounter.skillPointGoal}` : ""} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : skillEncounter ? "Skill Challenges" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" && !encounter.skillOutcome ? actions : ""}</div></div>`;
+    const skillGoal = skillEncounter && encounter.skillVictoryMode === "goal" ? `/${encounter.skillPointGoal}` : "";
+    panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : (chase || skillEncounter) ? `Round ${encounter.currentRound}${skillEncounter && encounter.roundLimit ? ` of ${encounter.roundLimit}` : ""}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : skillGoal} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : skillEncounter ? "Skill Challenges" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" && !encounter.skillOutcome ? actions : ""}</div></div>`;
   }
   panel.onclick = (event) => {
     const button = event.target.closest("[data-influence-action]");
@@ -1858,6 +1922,8 @@ async function activateEncounter(id) {
   if (encounter.subsystemType === "skill" && encounter.status === "draft") {
     encounter.currentRound = 1;
     encounter.skillPoints = 0;
+    encounter.skillPointsByActor = {};
+    encounter.skillWinnerActorId = "";
     encounter.skillOutcome = "";
     encounter.actorsActed = {};
     encounter.activeNpcId = encounter.npcs[0]?.id ?? "";
@@ -1910,7 +1976,7 @@ async function duplicateEncounter(id) {
   while (names.has(name.toLowerCase())) name = `${source.name} (Copy ${copyNumber++})`;
   const duplicate = deepClone(source);
   Object.assign(duplicate, {
-    id: randomID(), name, status: "draft", currentPhase: 1, currentRound: 1, chaseOutcome: "", skillOutcome: "", points: 0, researchPoints: 0, skillPoints: 0,
+    id: randomID(), name, status: "draft", currentPhase: 1, currentRound: 1, chaseOutcome: "", skillOutcome: "", skillWinnerActorId: "", points: 0, researchPoints: 0, skillPoints: 0, skillPointsByActor: {},
     opponentPosition: source.subsystemType === "chase" ? source.subjectStartPosition : source.opponentPosition,
     activeActorId: "", actorsActed: {}, phaseActions: {}, discoveries: {},
     activeEffects: ["chase", "skill"].includes(source.subsystemType) ? deepClone(source.activeEffects) : [], checkLog: [], pendingDiscoveries: [], pendingChecks: [], history: [], journalId: "", endedAt: null,
@@ -1979,8 +2045,8 @@ function importEncounterData() {
       normalizeEncounterCollections(imported);
       Object.assign(imported, {
         id: randomID(), name: uniqueEncounterName(imported.name), status: "draft",
-        currentPhase: 1, currentRound: 1, points: 0, researchPoints: 0, skillPoints: 0,
-        chaseOutcome: "", skillOutcome: "", participantIds: null, activeActorId: "", actorsActed: {}, phaseActions: {},
+        currentPhase: 1, currentRound: 1, points: 0, researchPoints: 0, skillPoints: 0, skillPointsByActor: {},
+        chaseOutcome: "", skillOutcome: "", skillWinnerActorId: "", participantIds: null, activeActorId: "", actorsActed: {}, phaseActions: {},
         discoveries: {}, activeEffects: [], checkLog: [], history: [], journalId: "",
         endedAt: null, presentationVisible: true
       });
@@ -2203,8 +2269,11 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       isResearch,
       isChase,
       isSkill,
+      individualSkillScoring: isSkill && this.encounter.skillScoringMode === "individual",
+      goalBasedSkillEncounter: isSkill && this.encounter.skillVictoryMode === "goal",
       isChallenge: isChase || isSkill,
       progressClockAvailable: !!progressClockDatabase(),
+      progressClockSupported: !isSkill || (this.encounter.skillScoringMode === "shared" && this.encounter.skillVictoryMode === "goal"),
       characterActors,
       skillChoices: [...PF2E_SKILLS, ...((isChase || isSkill) ? PF2E_SAVES : []), ...PF2E_LORE_SKILLS, ...Object.keys(LORE_CATEGORIES)],
       tabs,
@@ -2220,6 +2289,8 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       intervalUnits: { minute: "Minutes", hour: "Hours", day: "Days" },
       chaseTypes: { "chase-down": "Chase Down", "run-away": "Run Away", "beat-clock": "Beat the Clock", competitive: "Competitive", custom: "Custom" },
       subjectTurnOrders: { before: "Before the party", after: "After the party" },
+      skillScoringModes: { shared: "Shared party pool", individual: "Individual PC scores" },
+      skillVictoryModes: { goal: "Reach a point goal", gm: "GM decides" },
       dcVisibilities: { exact: "Exact DCs", relative: "Relative difficulty", hidden: "Hidden" },
       victorySplashModes: { automatic: "Automatic when the chase is won", manual: "Manual GM trigger after victory" },
       chasePositionOptions,
@@ -2230,6 +2301,12 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     await super._onRender(context, options);
     this.element.addEventListener("input", () => { this._dirty = true; });
     this.element.addEventListener("change", () => { this._dirty = true; });
+    for (const selector of ['[name="skillScoringMode"]', '[name="skillVictoryMode"]']) {
+      this.element.querySelector(selector)?.addEventListener("change", async () => {
+        this._capture();
+        await this.render({ force: true });
+      });
+    }
     this.element.querySelectorAll('[name^="participantNicknames."]').forEach((input) => input.addEventListener("input", () => {
       this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
     }));
@@ -2839,7 +2916,8 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   const points = request.type === "research"
     ? Number(npc.awards?.[["criticalFailure", "failure", "success", "criticalSuccess"][degree]] ?? 0)
     : ["influence", "chase", "skill"].includes(request.type) ? ([ -1, 0, 1, 2 ][degree] ?? 0) : 0;
-  const previousPoints = request.type === "research" ? Number(encounter.researchPoints) : request.type === "skill" ? Number(encounter.skillPoints) : Number(npc.points);
+  const individualSkillScoring = request.type === "skill" && encounter.skillScoringMode === "individual";
+  const previousPoints = request.type === "research" ? Number(encounter.researchPoints) : individualSkillScoring ? skillActorPoints(encounter, actor.id) : request.type === "skill" ? Number(encounter.skillPoints) : Number(npc.points);
   const newlyReachedInfluenceThresholds = request.type === "influence"
     ? npc.thresholds.filter((threshold) => threshold.points > previousPoints && threshold.points <= previousPoints + points)
     : [];
@@ -2856,12 +2934,18 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   if (request.type === "influence") npc.points = Math.max(0, npc.points + points);
   let skillWonNow = false;
   if (request.type === "skill") {
-    encounter.skillPoints = Math.max(0, Math.min(encounter.skillPointGoal, Number(encounter.skillPoints) + points));
-    if (encounter.skillPoints >= encounter.skillPointGoal) {
+    const cap = encounter.skillVictoryMode === "goal" ? encounter.skillPointGoal : Number.POSITIVE_INFINITY;
+    if (individualSkillScoring) {
+      encounter.skillPointsByActor[actor.id] = Math.max(0, Math.min(cap, previousPoints + points));
+      encounter.skillPoints = Object.values(encounter.skillPointsByActor).reduce((total, score) => total + Number(score || 0), 0);
+    } else encounter.skillPoints = Math.max(0, Math.min(cap, Number(encounter.skillPoints) + points));
+    const resultingPoints = individualSkillScoring ? skillActorPoints(encounter, actor.id) : encounter.skillPoints;
+    if (encounter.skillVictoryMode === "goal" && resultingPoints >= encounter.skillPointGoal) {
       encounter.skillOutcome = "victory";
+      encounter.skillWinnerActorId = individualSkillScoring ? actor.id : "";
       skillWonNow = true;
       logEntry.detailLabel = "Skill Encounter";
-      logEntry.details = [encounter.victoryText || "The party achieved its goal!"];
+      logEntry.details = [individualSkillScoring ? `${actorName} reached ${encounter.skillPointGoal} Skill Points.` : (encounter.victoryText || "The party achieved its goal!")];
     }
   }
   let chaseWonNow = false;
@@ -2932,7 +3016,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
       : request.type === "chase"
         ? `${signed(points)} Chase Point${Math.abs(points) === 1 ? "" : "s"}`
         : request.type === "skill"
-          ? `${signed(encounter.skillPoints - previousPoints)} Skill Point${Math.abs(encounter.skillPoints - previousPoints) === 1 ? "" : "s"}`
+        ? `${signed((individualSkillScoring ? skillActorPoints(encounter, actor.id) : encounter.skillPoints) - previousPoints)} Skill Point${Math.abs((individualSkillScoring ? skillActorPoints(encounter, actor.id) : encounter.skillPoints) - previousPoints) === 1 ? "" : "s"}`
         : `${signed(points)} Influence Point${Math.abs(points) === 1 ? "" : "s"}`;
   if (request.type !== "discovery") {
     await ChatMessage.create({
@@ -2959,7 +3043,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     }
   }
   if (skillWonNow) {
-    await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-reward"><strong>Skill Encounter Won</strong><p>${esc(encounter.victoryText || "The party achieved its goal!")}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+    await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-reward"><strong>Skill Encounter Won</strong><p>${individualSkillScoring ? `${esc(actorName)} reached ${encounter.skillPointGoal} Skill Points. ` : ""}${esc(encounter.victoryText || "The party achieved its goal!")}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
   }
   for (const canceled of canceledChaseRequests) await notifyPendingCheck(canceled, `${npcName} was overcome before this queued check could be adjudicated.`);
   for (const canceled of canceledSkillRequests) await notifyPendingCheck(canceled, "The party reached the Skill Point goal before this queued check could be adjudicated.");
