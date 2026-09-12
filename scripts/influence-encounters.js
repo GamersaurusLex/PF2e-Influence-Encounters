@@ -230,7 +230,10 @@ function normalizeEncounterCollections(encounter) {
   encounter.chaseType = ["chase-down", "run-away", "beat-clock", "competitive", "custom"].includes(encounter.chaseType) ? encounter.chaseType : "chase-down";
   encounter.currentRound = Math.max(1, Number(encounter.currentRound) || 1);
   encounter.subjectStartPosition = Math.max(0, Math.trunc(Number(encounter.subjectStartPosition ?? encounter.opponentPosition ?? 1) || 0));
-  encounter.opponentPosition = Math.max(0, Math.trunc(Number(encounter.opponentPosition) || 0));
+  const savedSubjectPosition = Number(encounter.opponentPosition);
+  encounter.opponentPosition = Number.isFinite(savedSubjectPosition)
+    ? Math.max(0, Math.trunc(savedSubjectPosition))
+    : encounter.subjectStartPosition;
   encounter.opponentPace = Math.max(0, Math.trunc(Number(encounter.opponentPace ?? 1) || 0));
   encounter.subjectTurnOrder = ["before", "after"].includes(encounter.subjectTurnOrder) ? encounter.subjectTurnOrder : (encounter.chaseType === "run-away" ? "after" : "before");
   encounter.obscureFutureObstacles = !!encounter.obscureFutureObstacles;
@@ -342,6 +345,12 @@ function normalizeEncounterCollections(encounter) {
   });
   if (encounter.npcs.length > 1 && encounter.npcs.some((npc) => npc.actorId)) {
     encounter.npcs = encounter.npcs.filter((npc) => !isGeneratedPlaceholderNpc(encounter, npc));
+  }
+  if (encounter.subsystemType === "chase") {
+    const lastPosition = Math.max(0, encounter.npcs.length - 1);
+    encounter.subjectStartPosition = Math.min(lastPosition, encounter.subjectStartPosition);
+    encounter.opponentPosition = Math.min(lastPosition, encounter.opponentPosition);
+    if (encounter.status === "draft") encounter.opponentPosition = encounter.subjectStartPosition;
   }
   encounter.activeNpcId = encounter.npcs.some((npc) => npc.id === encounter.activeNpcId)
     ? encounter.activeNpcId
@@ -1842,7 +1851,7 @@ async function activateEncounter(id) {
     const firstObstacle = encounter.npcs.find((obstacle) => Number(obstacle.points) < Number(obstacle.maximumPoints || 0)) ?? encounter.npcs[0];
     encounter.activeNpcId = firstObstacle?.id ?? "";
     encounter.currentRound = 1;
-    encounter.opponentPosition = encounter.subjectStartPosition;
+    encounter.opponentPosition = Math.min(Math.max(0, encounter.npcs.length - 1), encounter.subjectStartPosition);
     encounter.actorsActed = {};
     encounter.chaseOutcome = "";
   }
@@ -1919,6 +1928,7 @@ async function duplicateEncounter(id) {
   });
   if (duplicate.subsystemType === "chase") {
     duplicate.activeNpcId = duplicate.npcs[0]?.id ?? "";
+    duplicate.subjectStartPosition = Math.min(Math.max(0, duplicate.npcs.length - 1), Math.max(0, Number(source.subjectStartPosition) || 0));
     duplicate.opponentPosition = duplicate.subjectStartPosition;
     duplicate.activeEffects.forEach((effect) => effect.remaining = effect.uses);
   }
@@ -2186,6 +2196,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       delete tabs.results;
       tabs.skills.label = isChase ? "Overcome Checks" : "Skill Checks";
     }
+    const chasePositionOptions = Object.fromEntries(this.encounter.npcs.map((npc, index) => [index, `${index + 1} — ${targetDisplayName(npc)}`]));
     return {
       ...context,
       encounter: encounterView,
@@ -2211,6 +2222,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       subjectTurnOrders: { before: "Before the party", after: "After the party" },
       dcVisibilities: { exact: "Exact DCs", relative: "Relative difficulty", hidden: "Hidden" },
       victorySplashModes: { automatic: "Automatic when the chase is won", manual: "Manual GM trigger after victory" },
+      chasePositionOptions,
       npcTargets: { ...((isChase || isSkill) ? { "": isChase ? "All obstacles" : "All challenges" } : {}), ...Object.fromEntries(this.encounter.npcs.map((npc) => [npc.id, targetDisplayName(npc)])) }
     };
   }
@@ -2517,6 +2529,9 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       if (!this.encounter.npcs.length) {
         ui.notifications.warn(`Add at least one ${this.encounter.subsystemType === "research" ? "Research Source" : this.encounter.subsystemType === "chase" ? "Obstacle" : this.encounter.subsystemType === "skill" ? "Challenge" : "Influence Target"} before saving this encounter.`);
         return false;
+      }
+      if (this.encounter.subsystemType === "chase" && this.encounter.status === "draft") {
+        this.encounter.opponentPosition = this.encounter.subjectStartPosition;
       }
       this.encounter.npcs.forEach((npc, npcIndex) => {
         npc.nickname = this.element.querySelector(`[name="npcs.${npcIndex}.nickname"]`)?.value.trim() ?? "";

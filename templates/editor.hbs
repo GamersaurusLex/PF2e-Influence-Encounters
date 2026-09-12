@@ -31,8 +31,9 @@
         {{else}}{{#if isChase}}
         <div class="form-group"><label>Chase Type</label><div class="form-fields"><select name="chaseType">{{selectOptions chaseTypes selected=encounter.chaseType}}</select></div></div>
         <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><label>Round Limit</label><input type="number" min="0" name="roundLimit" value="{{encounter.roundLimit}}"></div></div>
-        <div class="form-group"><label>Subject Starting Obstacle</label><div class="form-fields"><input type="number" min="0" step="1" name="subjectStartPosition" value="{{encounter.subjectStartPosition}}"></div></div>
-        <p class="hint">Obstacle positions are zero-based: 0 is the first obstacle, 1 is the second, and so on.</p>
+        <div class="form-group"><label>Subject Starting Obstacle</label><div class="form-fields"><select name="subjectStartPosition">{{selectOptions chasePositionOptions selected=encounter.subjectStartPosition}}</select></div></div>
+        <div class="form-group"><label>Current Subject Obstacle</label><div class="form-fields"><select name="opponentPosition">{{selectOptions chasePositionOptions selected=encounter.opponentPosition}}</select></div></div>
+        <p class="hint">The starting obstacle is used whenever a draft chase begins or an in-progress chase is duplicated. The current obstacle tracks live progress and can be corrected manually after an undo or other state change.</p>
         <div class="form-group"><label>Subject Pace</label><div class="form-fields"><input type="number" min="0" step="1" name="opponentPace" value="{{encounter.opponentPace}}"><span class="units">obstacle(s) per turn</span></div></div>
         <div class="form-group"><label>Subject Acts</label><div class="form-fields"><select name="subjectTurnOrder">{{selectOptions subjectTurnOrders selected=encounter.subjectTurnOrder}}</select></div></div>
         <div class="form-group"><label>Obstacle Visibility</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="obscureFutureObstacles" {{checked encounter.obscureFutureObstacles}}> Obscure future obstacles from players</label></div></div>

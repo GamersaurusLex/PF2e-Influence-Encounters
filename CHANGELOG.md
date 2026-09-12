@@ -1,7 +1,12 @@
 # Changelog
 
-## 0.5.0 — 2026-09-12
+## 0.5.1 — 2026-09-12
 
+- Fixed Chase subject positions falling back to the first obstacle when older or restored state lacked a runtime position.
+- Draft and duplicated Chases now synchronize the subject's runtime position to its configured starting obstacle, with both positions clamped to the available obstacle list.
+- Replaced ambiguous zero-based position inputs with named obstacle dropdowns and added an editable Current Subject Obstacle control.
+
+## 0.5.0 — 2026-09-12
 - Added a whole-chase text parser for published obstacle headings, levels, Chase Points, shared DCs, Overcome options, and descriptions.
 - Added the six-obstacle `Abeo's Market Chase` sample as an editable chase template.
 - Added Skill Encounters as a fourth subsystem. Parties select from reusable challenges, make configured skill checks once per PC per round, and accumulate shared Skill Points before a configurable round limit; reaching the goal wins automatically, while finishing the final round short of the goal records failure.
