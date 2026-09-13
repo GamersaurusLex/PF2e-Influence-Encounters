@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 — 2026-09-12
+
+- Added per-challenge text parsing for Skill Encounters, including challenge headings, check DCs, descriptions, and special circumstances.
+
 ## 0.6.0 — 2026-09-12
 
 - Added shared-pool and individual-PC scoring modes for Skill Encounters, including editable scores, per-PC roll awards, tracker/sidebar display, undo, duplication resets, and Journal summaries.

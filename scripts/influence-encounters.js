@@ -143,6 +143,41 @@ function parseResearchSource(source, npc) {
   return found;
 }
 
+function parseSkillChallenge(source, npc) {
+  const raw = String(source).replace(/\r/g, "").trim();
+  const text = raw.replace(/\s+/g, " ").trim();
+  const found = [];
+  const firstLine = raw.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+  const heading = firstLine.match(/^(.+?)\s+(?:SKILL\s+)?(?:CHALLENGE|OBSTACLE)(?:\s+\d+)?\s*$/i);
+  if (heading) {
+    npc.name = chaseTitle(heading[1].trim());
+    found.push("name");
+  }
+
+  const sectionEnd = /\b(?:Description|Background|Special(?:\s+Rules?)?|Requirements?|Circumstances?|Conditional\s+Bonuses?)\b/i;
+  const checksText = sectionText(text, /\b(?:Skill\s+Checks?|Checks?|Overcome)\s*/i, sectionEnd);
+  const checks = parseChaseChecks(checksText ?? text);
+  if (checks.length) {
+    npc.influence = checks;
+    found.push(`${checks.length} Skill check(s)`);
+  }
+
+  const description = sectionText(text, /\b(?:Description|Background)\s*[:—-]?\s*/i,
+    /\b(?:Skill\s+Checks?|Checks?|Overcome|Special(?:\s+Rules?)?|Requirements?|Circumstances?|Conditional\s+Bonuses?)\b/i);
+  if (description !== null) {
+    npc.background = description;
+    found.push("description");
+  }
+
+  const requirements = sectionText(text, /\b(?:Special(?:\s+Rules?)?|Requirements?|Circumstances?|Conditional\s+Bonuses?)\s*[:—-]?\s*/i,
+    /\b(?:Skill\s+Checks?|Checks?|Overcome|Description|Background)\b/i);
+  if (requirements !== null) {
+    npc.requirements = requirements;
+    found.push("special rules");
+  }
+  return found;
+}
+
 function chaseTitle(value = "") {
   return String(value).toLowerCase().replace(/(^|[\s—-])([a-z])/g, (_match, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
 }
@@ -2515,8 +2550,9 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const npcIndex = Number(target.dataset.npcIndex);
     const npc = this.encounter.npcs[npcIndex];
     const source = this.element.querySelector(`[data-parser-source="${npcIndex}"]`)?.value?.trim();
-    if (!npc || !source) return ui.notifications.warn(`Paste the ${this.encounter.subsystemType === "research" ? "source's research" : "NPC's influence"} text before parsing.`);
-    const found = this.encounter.subsystemType === "research" ? parseResearchSource(source, npc) : parseInfluenceSource(source, npc);
+    const type = this.encounter.subsystemType;
+    if (!npc || !source) return ui.notifications.warn(`Paste the ${type === "research" ? "source's research" : type === "skill" ? "challenge" : "NPC's influence"} text before parsing.`);
+    const found = type === "research" ? parseResearchSource(source, npc) : type === "skill" ? parseSkillChallenge(source, npc) : parseInfluenceSource(source, npc);
     if (!found.length) return ui.notifications.warn("No recognizable sections were found.");
     this._dirty = true;
     ui.notifications.info(`Parsed ${npc.name}: ${found.join(", ")}. Review the generated fields before saving.`);
