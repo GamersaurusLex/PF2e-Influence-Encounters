@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1 — 2026-09-15
+
+- Added an optional player-facing list of available checks for each Research source, independent Research DC visibility controls, and per-check guidance text for explaining how each skill applies.
+
 ## 0.7.0 — 2026-09-15
 
 - Added automatic encounter opening for all connected users on activation and resume, plus recovery after reconnecting or refreshing during an active encounter.

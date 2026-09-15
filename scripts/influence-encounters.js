@@ -56,7 +56,7 @@ function skillSlug(label = "") {
 
 function parsedSkill(label, dc, type) {
   const cleanLabel = String(label).replace(/\([^)]*\)/g, "").replace(/^\s*[,;:]\s*/, "").trim();
-  return { id: randomID(), label: cleanLabel, slug: skillSlug(cleanLabel), dc: Number(dc), dcModified: true, lore: /\blore$/i.test(cleanLabel), secret: false };
+  return { id: randomID(), label: cleanLabel, slug: skillSlug(cleanLabel), description: "", dc: Number(dc), dcModified: true, lore: /\blore$/i.test(cleanLabel), secret: false };
 }
 
 function parseDcSkills(text, type) {
@@ -278,6 +278,7 @@ function normalizeEncounterCollections(encounter) {
     ? Math.max(1, Number(encounter.roundLimit) || 3)
     : Math.max(0, Number(encounter.roundLimit) || 0);
   encounter.dcVisibility = ["exact", "relative", "hidden"].includes(encounter.dcVisibility) ? encounter.dcVisibility : "exact";
+  encounter.showResearchSkills = encounter.showResearchSkills !== false;
   encounter.victoryText ??= "";
   encounter.failureText ??= "";
   encounter.victorySplashImage ??= "";
@@ -371,6 +372,7 @@ function normalizeEncounterCollections(encounter) {
     npc.influence = indexedArray(npc.influence ?? deepClone(encounter.influence));
     for (const skill of [...npc.discovery, ...npc.influence]) {
       skill.dc = Number(skill.dc) || 0;
+      skill.description ??= "";
       // Legacy encounters predate automatic DC tracking. Treat their values as
       // GM-authored so a future level change can never overwrite them.
       skill.dcModified = typeof skill.dcModified === "boolean" ? skill.dcModified : skill.dcModified === "false" ? false : true;
@@ -462,6 +464,7 @@ const DEFAULT_ENCOUNTER = {
   promptAdvanceWhenAllActed: false,
   roundLimit: 0,
   dcVisibility: "exact",
+  showResearchSkills: true,
   victoryText: "",
   failureText: "",
   victorySplashImage: "",
@@ -1251,7 +1254,7 @@ class InfluenceTracker extends Application {
     const subjectIsPursuer = encounter?.chaseType === "run-away" || /pursuer/i.test(subjectRole);
     const chaseSubjectStatus = obscureChaseCourse ? `The ${subjectRole} is ${subjectIsPursuer ? "behind you" : "ahead of you"}.` : "";
     const standardDc = levelBasedDC(encounter?.level ?? 0);
-    const overcomeChecks = (isChase || isSkill) ? (activeNpcRecord?.influence ?? []).map((skill) => {
+    const visibleChecks = (activeNpcRecord?.influence ?? []).map((skill) => {
       let dcText = "";
       if (game.user.isGM || encounter.dcVisibility === "exact") dcText = `DC ${skill.dc}`;
       else if (encounter.dcVisibility === "relative") {
@@ -1259,9 +1262,11 @@ class InfluenceTracker extends Application {
         dcText = difference <= -5 ? "Incredibly Easy" : difference <= -2 ? "Easy" : difference >= 10 ? "Incredibly Hard" : difference >= 5 ? "Very Hard" : difference >= 2 ? "Hard" : "Standard";
       }
       return { ...skill, dcText };
-    }) : [];
+    });
+    const overcomeChecks = (isChase || isSkill) ? visibleChecks : [];
+    const researchChecks = isResearch && (game.user.isGM || encounter.showResearchSkills) ? visibleChecks : [];
     const sourceAvailable = isChase ? activeNpc?.availability !== "exhausted" : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, isResearch, isChase, isSkill, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus,
+    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus,
       researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
       pointLabel: isResearch ? "RP" : isChase ? "CP" : isSkill ? "SP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : isSkill ? "Skill Challenges" : "Influence Targets",
       actionLabel: isResearch ? "Research" : (isChase || isSkill) ? "Make a Check" : "Influence", currentPoints,
@@ -2572,6 +2577,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this.encounter.publicPoints = this.element.querySelector('[name="publicPoints"]')?.checked ?? false;
     this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
     this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
+    this.encounter.showResearchSkills = this.element.querySelector('[name="showResearchSkills"]')?.checked ?? this.encounter.showResearchSkills;
     this.encounter.participantIds = [...this.element.querySelectorAll('[name="partyParticipant"]:checked')].map((input) => input.value);
     for (const input of this.element.querySelectorAll('[name^="participantNicknames."]')) {
       this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
@@ -2675,8 +2681,8 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       this.encounter.npcs.push(created);
       if (!chase || firstChaseObstacle) this.encounter.activeNpcId = created.id;
     }
-    if (kind === "discovery" && npc) npc.discovery.push({ id: randomID(), slug: "", label: "", dc: automaticSkillDC(this.encounter), dcModified: false, lore: false, secret: false });
-    if (kind === "influence" && npc) npc.influence.push({ id: randomID(), slug: "", label: "", dc: automaticSkillDC(this.encounter), dcModified: false, lore: false });
+    if (kind === "discovery" && npc) npc.discovery.push({ id: randomID(), slug: "", label: "", description: "", dc: automaticSkillDC(this.encounter), dcModified: false, lore: false, secret: false });
+    if (kind === "influence" && npc) npc.influence.push({ id: randomID(), slug: "", label: "", description: "", dc: automaticSkillDC(this.encounter), dcModified: false, lore: false });
     if (kind === "threshold" && npc) npc.thresholds.push({ id: randomID(), points: 0, label: "", text: "", boons: [] });
     if (kind === "boon" && npc) npc.thresholds[Number(thresholdIndex)]?.boons.push({ id: randomID(), kind: "narrative", label: "New Reward", description: "", value: 0, type: "circumstance", mode: "narrative", scope: "both", skills: [], uses: 0, remaining: 0, activation: "automatic", active: true, applied: false, targetNpcId: npc.id, playerVisible: true });
     if (kind === "research-threshold") this.encounter.researchThresholds.push({ id: randomID(), points: 0, label: "New Discovery", text: "", boons: [] });
@@ -2712,6 +2718,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       this.encounter.publicPoints = this.element.querySelector('[name="publicPoints"]')?.checked ?? false;
       this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
       this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
+      this.encounter.showResearchSkills = this.element.querySelector('[name="showResearchSkills"]')?.checked ?? this.encounter.showResearchSkills;
       this.encounter.participantIds = [...this.element.querySelectorAll('[name="partyParticipant"]:checked')].map((input) => input.value);
       for (const input of this.element.querySelectorAll('[name^="participantNicknames."]')) {
         this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();

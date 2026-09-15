@@ -56,6 +56,15 @@
 .influence-editor fieldset legend { padding: 0 .35rem; font-size: var(--font-size-18); font-weight: 700; }
 .influence-editor .form-footer { flex: 0 0 auto; margin: 0; padding: .75rem 1.5rem 1rem; border-top: 1px solid var(--color-border); }
 .skill-row, .boon-row { display: grid; grid-template-columns: 1.4fr 1fr 70px 100px 32px; gap: .4rem; margin-bottom: .35rem; align-items: center; }
+.skill-editor { margin-bottom: .65rem; }
+.skill-editor .skill-row { margin-bottom: .25rem; }
+.skill-editor .skill-guidance-field { display: grid; grid-template-columns: 110px 1fr; gap: .5rem; align-items: start; font-weight: 600; }
+.skill-editor .skill-guidance { min-height: 48px; margin: 0; }
+.research-checks { margin-top: .8rem; }
+.research-checks h4 { margin-bottom: .35rem; }
+.research-checks ul { margin: 0; padding-left: 1.25rem; }
+.research-checks li + li { margin-top: .45rem; }
+.research-checks li p { margin: .15rem 0 0; }
 .boon-row { grid-template-columns: 1.4fr 60px 110px 110px 55px 1fr 32px; }
 .influence-editor fieldset { margin: 0 0 1rem; }
 .influence-editor textarea { width: 100%; min-height: 60px; }
