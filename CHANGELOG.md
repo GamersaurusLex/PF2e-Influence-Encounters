@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0 — 2026-09-15
+
+- Added automatic encounter opening for all connected users on activation and resume, plus recovery after reconnecting or refreshing during an active encounter.
+- Added base and party-balanced Chase Point requirements with whole-chase recalculation for the configured party size.
+- Added current character modifiers to check selection, an optional all-participants-acted advancement prompt, manual Chase victory/failure controls, standardized check labels, and a level-based DC reference grid.
+
 ## 0.6.1 — 2026-09-12
 
 - Added per-challenge text parsing for Skill Encounters, including challenge headings, check DCs, descriptions, and special circumstances.

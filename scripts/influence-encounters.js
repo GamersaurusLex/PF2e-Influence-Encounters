@@ -272,6 +272,8 @@ function normalizeEncounterCollections(encounter) {
   encounter.opponentPace = Math.max(0, Math.trunc(Number(encounter.opponentPace ?? 1) || 0));
   encounter.subjectTurnOrder = ["before", "after"].includes(encounter.subjectTurnOrder) ? encounter.subjectTurnOrder : (encounter.chaseType === "run-away" ? "after" : "before");
   encounter.obscureFutureObstacles = !!encounter.obscureFutureObstacles;
+  encounter.chaseDesignedPartySize = Math.max(1, Math.trunc(Number(encounter.chaseDesignedPartySize) || 4));
+  encounter.promptAdvanceWhenAllActed = !!encounter.promptAdvanceWhenAllActed;
   encounter.roundLimit = encounter.subsystemType === "skill"
     ? Math.max(1, Number(encounter.roundLimit) || 3)
     : Math.max(0, Number(encounter.roundLimit) || 0);
@@ -346,6 +348,7 @@ function normalizeEncounterCollections(encounter) {
     npc.personality ??= "";
     npc.points = Number(npc.points ?? encounter.points) || 0;
     npc.maximumPoints = Math.max(0, Number(npc.maximumPoints) || 0);
+    npc.baseMaximumPoints = Math.max(0, Number(npc.baseMaximumPoints ?? npc.maximumPoints) || 0);
     npc.maximumPointsPerActor = Math.max(0, Number(npc.maximumPointsPerActor) || 0);
     npc.researchByActor = npc.researchByActor && typeof npc.researchByActor === "object" ? npc.researchByActor : {};
     for (const [actorId, rawRecord] of Object.entries(npc.researchByActor)) {
@@ -455,6 +458,8 @@ const DEFAULT_ENCOUNTER = {
   opponentPace: 1,
   subjectTurnOrder: "before",
   obscureFutureObstacles: false,
+  chaseDesignedPartySize: 4,
+  promptAdvanceWhenAllActed: false,
   roundLimit: 0,
   dcVisibility: "exact",
   victoryText: "",
@@ -650,7 +655,7 @@ const RESEARCHING_THE_EIGHTH = {
 
 function chaseObstacle(id, name, points, checks, description, special = "") {
   return {
-    id, name, nickname: "", actorId: "", image: "icons/svg/door-exit.svg", points: 0, maximumPoints: points,
+    id, name, nickname: "", actorId: "", image: "icons/svg/door-exit.svg", points: 0, baseMaximumPoints: points, maximumPoints: points,
     availability: "available", requirements: special, researchInterval: "",
     awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
     background: description, appearance: "", personality: "", discovery: [],
@@ -876,6 +881,15 @@ function chaseVictoryMessage(encounter) {
   return name && name !== "Chase Objective" ? `You caught ${name}!` : "You caught the quarry!";
 }
 
+function chaseFailureMessage(encounter) {
+  if (encounter?.failureText) return encounter.failureText;
+  const role = String(encounter?.chaseSubject?.label ?? "").trim();
+  const pursuer = encounter?.chaseType === "run-away" || /pursuer/i.test(role);
+  const name = String(encounter?.chaseSubject?.nickname ?? "").trim() || String(encounter?.chaseSubject?.name ?? "").trim();
+  if (pursuer) return name && name !== "Chase Objective" ? `${name} caught the party.` : "The pursuer caught the party.";
+  return name && name !== "Chase Objective" ? `${name} escaped.` : "The quarry escaped.";
+}
+
 function influenceRewardSections(thresholds) {
   return thresholds.map((threshold) => {
     const visibleBoons = (threshold.boons ?? []).filter((boon) => boon.playerVisible);
@@ -978,6 +992,36 @@ function snapshot(encounter, label) {
   encounter.history ??= [];
   encounter.history.push({ id: randomID(), at: Date.now(), label, state: copy });
   if (encounter.history.length > 50) encounter.history.shift();
+}
+
+function balancedChasePoints(basePoints, participantCount, designedPartySize) {
+  return Math.max(1, Math.ceil((Math.max(1, Number(basePoints) || 1) * Math.max(1, participantCount)) / Math.max(1, designedPartySize)));
+}
+
+function actorStatisticModifier(actor, skill) {
+  const statistic = skillStatistic(actor, skill.slug, skill.label);
+  const value = Number(statistic?.mod ?? statistic?.check?.mod ?? statistic?.modifier ?? statistic?.value);
+  return Number.isFinite(value) ? value : null;
+}
+
+const roundAdvancePrompts = new Set();
+async function maybePromptRoundAdvance(encounter) {
+  if (!game.user.isGM || !encounter?.promptAdvanceWhenAllActed || !["influence", "chase", "skill"].includes(encounter.subsystemType)) return;
+  if (encounter.status !== "active" || encounter.chaseOutcome || encounter.skillOutcome || encounter.pendingChecks?.length) return;
+  if (encounter.subsystemType === "influence" && encounter.currentPhase >= encounter.phases) return;
+  const participants = encounterParticipants(encounter);
+  if (!participants.length || !participants.every((actor) => encounter.actorsActed?.[actor.id])) return;
+  const roundNumber = encounter.subsystemType === "influence" ? encounter.currentPhase : encounter.currentRound;
+  const unit = encounter.subsystemType === "influence" ? "phase" : "round";
+  const key = `${encounter.id}:${unit}:${roundNumber}`;
+  if (roundAdvancePrompts.has(key)) return;
+  roundAdvancePrompts.add(key);
+  try {
+    const advance = await Dialog.confirm({ title: `${unit.titleCase()} Complete`, content: `<p>All participating PCs have acted in ${unit} ${roundNumber}. Advance to the next ${unit}?</p>` });
+    if (advance) await tracker?._action({ currentTarget: { dataset: { action: encounter.subsystemType === "influence" ? "advance" : "next-round" } } });
+  } finally {
+    roundAdvancePrompts.delete(key);
+  }
 }
 
 function skillActorPoints(encounter, actorId) {
@@ -1234,6 +1278,7 @@ class InfluenceTracker extends Application {
       canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused",
       canTriggerVictorySplash: game.user.isGM && isChase && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual",
       canDeclareSkillOutcome: game.user.isGM && isSkill && encounter?.skillVictoryMode === "gm" && encounter?.status === "active" && !encounter?.skillOutcome,
+      canDeclareChaseOutcome: game.user.isGM && isChase && encounter?.status === "active" && !encounter?.chaseOutcome,
       canPrior: !isResearch && !isChase && encounter?.status === "active" && (encounter?.currentPhase ?? 1) > 1,
       canNext: !isResearch && !isChase && encounter?.status === "active" && (encounter?.currentPhase ?? 1) < (encounter?.phases ?? 1),
       canNextRound: (isChase || isSkill) && encounter?.status === "active" && !encounter?.chaseOutcome && !encounter?.skillOutcome && !(isSkill && encounter.skillVictoryMode === "gm" && encounter.roundLimit && encounter.currentRound >= encounter.roundLimit),
@@ -1338,7 +1383,7 @@ class InfluenceTracker extends Application {
       if (encounter.roundLimit && encounter.currentRound > encounter.roundLimit) ui.notifications.warn("The chase has reached its configured round limit.");
       if (encounter.opponentPosition >= encounter.npcs.length) {
         encounter.chaseOutcome = "failure";
-        await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-reward-lost"><strong>Chase Lost</strong><p>${esc(encounter.failureText || "The quarry escaped.")}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC });
+        await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-reward-lost"><strong>Chase Lost</strong><p>${esc(chaseFailureMessage(encounter))}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
       }
       }
     } else if (action === "pass-obstacle") {
@@ -1348,6 +1393,19 @@ class InfluenceTracker extends Application {
       snapshot(encounter, `Pass: ${targetDisplayName(npc)}`);
       npc.points = Math.max(0, Number(npc.points) - 1);
       encounter.actorsActed[encounter.activeActorId] = true;
+    } else if (action === "declare-chase-outcome") {
+      if (encounter.subsystemType !== "chase" || encounter.chaseOutcome) return;
+      if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before declaring the outcome.");
+      const outcome = event.currentTarget.dataset.outcome;
+      if (!["victory", "failure"].includes(outcome)) return;
+      snapshot(encounter, `Declare chase ${outcome}`);
+      encounter.chaseOutcome = outcome;
+      const fallback = outcome === "victory" ? chaseVictoryMessage(encounter) : chaseFailureMessage(encounter);
+      await ChatMessage.create({
+        content: `<div class="influence-chat influence-result ${outcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${outcome === "victory" ? "Chase Won" : "Chase Lost"}</strong><p>${esc(outcome === "victory" ? (encounter.victoryText || fallback) : (encounter.failureText || fallback))}</p></div>`,
+        style: CONST.CHAT_MESSAGE_STYLES.OOC,
+        flags: { [MODULE_ID]: { messageKind: "result" } }
+      });
     } else if (action === "advance") {
       snapshot(encounter, action);
       encounter.phaseActions ??= {};
@@ -1437,6 +1495,8 @@ class InfluenceTracker extends Application {
     this.render(false);
     renderCinematicHud();
     renderInfluenceSidebar();
+    if (action === "declare-chase-outcome" && encounter.chaseOutcome === "victory" && encounter.victorySplashMode === "automatic") triggerVictorySplash(Store.get(encounter.id));
+    if (action === "pass-obstacle") maybePromptRoundAdvance(Store.get(encounter.id));
   }
 }
 
@@ -1583,7 +1643,7 @@ function renderInfluenceSidebar() {
     const points = research ? encounter.researchPoints : skillEncounter && encounter.skillScoringMode === "individual" ? skillActorPoints(encounter, selection.actorId) : skillEncounter ? encounter.skillPoints : activeNpc?.points ?? 0;
     const pointLabel = research ? "RP" : chase ? "CP" : skillEncounter ? "SP" : "IP";
     const researchDisabled = research && !researchSourceAvailableForActor(activeNpc, selection.actorId) ? " disabled" : "";
-    const actions = research ? `<button data-influence-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-influence-action="chase"><i class="fa-solid fa-person-running"></i> Roll to Overcome</button>' : skillEncounter ? '<button data-influence-action="skill"><i class="fa-solid fa-dice-d20"></i> Make a Check</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
+    const actions = research ? `<button data-influence-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-influence-action="chase"><i class="fa-solid fa-person-running"></i> Make a Check</button>' : skillEncounter ? '<button data-influence-action="skill"><i class="fa-solid fa-dice-d20"></i> Make a Check</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
     const chaseStatus = obscureChaseCourse ? `<p class="chase-relative-status">The ${esc(encounter.chaseSubject?.label || "Subject")} is ${encounter.chaseType === "run-away" || /pursuer/i.test(encounter.chaseSubject?.label || "") ? "behind you" : "ahead of you"}.</p>` : "";
     const skillGoal = skillEncounter && encounter.skillVictoryMode === "goal" ? `/${encounter.skillPointGoal}` : "";
     panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : (chase || skillEncounter) ? `Round ${encounter.currentRound}${skillEncounter && encounter.roundLimit ? ` of ${encounter.roundLimit}` : ""}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : skillGoal} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : skillEncounter ? "Skill Challenges" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" && !encounter.skillOutcome ? actions : ""}</div></div>`;
@@ -1971,6 +2031,7 @@ async function activateEncounter(id) {
   tracker?.render(true);
   renderInfluenceSidebar();
   renderCinematicHud();
+  game.socket.emit(SOCKET, { action: "open-encounter", encounterId: id });
 }
 
 async function pauseEncounter(id) {
@@ -1999,7 +2060,7 @@ async function resumeEncounter(id) {
   tracker?.render(true);
   renderInfluenceSidebar();
   renderCinematicHud();
-  game.socket.emit(SOCKET, { action: "refresh" });
+  game.socket.emit(SOCKET, { action: "open-encounter", encounterId: id });
 }
 
 async function duplicateEncounter(id) {
@@ -2251,7 +2312,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     position: { width: 860, height: 780 },
     window: { icon: "fa-solid fa-comments", resizable: true, contentClasses: ["standard-form", "influence-editor"] },
     form: { closeOnSubmit: false, handler: EncounterEditor.#onSubmit },
-    actions: { add: EncounterEditor.#onAdd, remove: EncounterEditor.#onRemove, move: EncounterEditor.#onMove, parse: EncounterEditor.#onParse, parseChase: EncounterEditor.#onParseChase, unlink: EncounterEditor.#onUnlink }
+    actions: { add: EncounterEditor.#onAdd, remove: EncounterEditor.#onRemove, move: EncounterEditor.#onMove, parse: EncounterEditor.#onParse, parseChase: EncounterEditor.#onParseChase, rebalanceChase: EncounterEditor.#onRebalanceChase, dcReference: EncounterEditor.#onDcReference, unlink: EncounterEditor.#onUnlink }
   };
   static PARTS = {
     form: { template: `modules/${MODULE_ID}/templates/editor.hbs`, root: true, scrollable: [".content"] }
@@ -2510,6 +2571,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     normalizeEncounterCollections(this.encounter);
     this.encounter.publicPoints = this.element.querySelector('[name="publicPoints"]')?.checked ?? false;
     this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
+    this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
     this.encounter.participantIds = [...this.element.querySelectorAll('[name="partyParticipant"]:checked')].map((input) => input.value);
     for (const input of this.element.querySelectorAll('[name^="participantNicknames."]')) {
       this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
@@ -2572,6 +2634,21 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     ui.notifications.info(`Parsed ${parsed.obstacles.length} chase obstacle(s). Review the generated fields before saving.`);
     await this.render({ force: true });
   }
+  static async #onRebalanceChase() {
+    this._capture();
+    const participants = Array.isArray(this.encounter.participantIds) ? this.encounter.participantIds.length : defaultPartyCharacters().length;
+    for (const obstacle of this.encounter.npcs) obstacle.maximumPoints = balancedChasePoints(obstacle.baseMaximumPoints, participants, this.encounter.chaseDesignedPartySize);
+    this._dirty = true;
+    ui.notifications.info(`Rebalanced all obstacles for ${participants || 1} participating PC${participants === 1 ? "" : "s"}.`);
+    await this.render({ force: true });
+  }
+  static async #onDcReference() {
+    this._capture();
+    const standard = levelBasedDC(this.encounter.level);
+    const adjustments = [["Incredibly Easy", -10], ["Very Easy", -5], ["Easy", -2], ["Standard", 0], ["Hard", 2], ["Very Hard", 5], ["Incredibly Hard", 10]];
+    const cells = adjustments.map(([label, adjustment]) => `<tr><th>${label}</th><td>${standard + adjustment}</td><td>${signed(adjustment)}</td></tr>`).join("");
+    new Dialog({ title: `Level ${this.encounter.level} DC Reference`, content: `<table class="dc-reference-grid"><thead><tr><th>Difficulty</th><th>DC</th><th>Adjustment</th></tr></thead><tbody>${cells}</tbody></table>`, buttons: { close: { label: "Close" } }, default: "close" }).render(true);
+  }
   static async #onUnlink(_event, target) {
     this._capture();
     const npc = this.encounter.npcs[Number(target.dataset.index)];
@@ -2590,7 +2667,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       const skillEncounter = this.encounter.subsystemType === "skill";
       const firstChaseObstacle = chase && this.encounter.npcs.length === 0;
       const created = { id: randomID(), name: research ? "New Research Source" : chase ? "New Obstacle" : skillEncounter ? "New Challenge" : "New Influence Target", image: research ? "icons/svg/book.svg" : chase ? "icons/svg/door-exit.svg" : skillEncounter ? "icons/svg/d20-black.svg" : "icons/svg/mystery-man.svg", actorId: "", points: 0,
-        maximumPoints: research ? 4 : chase ? 3 : 0, availability: "available", requirements: "", researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
+        baseMaximumPoints: chase ? 3 : 0, maximumPoints: research ? 4 : chase ? 3 : 0, availability: "available", requirements: "", researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
         background: "", appearance: "", personality: "", discovery: (chase || skillEncounter) ? [] : deepClone(DEFAULT_ENCOUNTER.discovery.slice(0, 2)), influence: [], thresholds: [],
         weakness: { label: "Weakness", description: "", value: 0, type: "circumstance", mode: "dc" },
         strength: { label: "Resistance", description: "", value: 0, type: "circumstance", mode: "dc" } };
@@ -2629,10 +2706,12 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   }
   async _save(formData) {
     try {
+      const priorActiveState = this.encounter.id ? Store.get(this.encounter.id) : null;
       this._mergeFormData(formData);
       normalizeEncounterCollections(this.encounter);
       this.encounter.publicPoints = this.element.querySelector('[name="publicPoints"]')?.checked ?? false;
       this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
+      this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
       this.encounter.participantIds = [...this.element.querySelectorAll('[name="partyParticipant"]:checked')].map((input) => input.value);
       for (const input of this.element.querySelectorAll('[name^="participantNicknames."]')) {
         this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
@@ -2668,6 +2747,10 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       });
       this.encounter.researchPoints = Math.max(0, Number(this.encounter.researchPoints) || 0);
       this.encounter.researchInterval.value = Math.max(1, Number(this.encounter.researchInterval.value) || 1);
+      if (priorActiveState?.status === "active") {
+        snapshot(priorActiveState, "Edit active encounter");
+        this.encounter.history = priorActiveState.history;
+      }
       this.encounter.researchThresholds.forEach((threshold) => threshold.points = Math.max(0, Number(threshold.points) || 0));
       this.encounter.activeEffects.forEach((effect) => {
         effect.value = Number(effect.value) || 0;
@@ -2740,17 +2823,17 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
     const perception = npc.discovery.find((skill) => skill.slug === "perception");
     const diplomacy = npc.discovery.find((skill) => skill.slug === "diplomacy");
     const primary = [perception, diplomacy].filter(Boolean)
-      .map((skill) => `<option value="configured:${skill.id}">${esc(skill.label)}</option>`).join("");
+      .map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
     const otherSkills = actorSkillChoices(actor).filter((skill) => !["perception", "diplomacy"].includes(skill.slug));
-    const remaining = otherSkills.map((skill) => `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}</option>`).join("");
+    const remaining = otherSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
     options = `${primary}<option disabled>──────────</option>${remaining}`;
   } else {
     const skills = availableSkillsForActor(actor, npc.influence);
     if (!skills.length) return ui.notifications.warn(`${actor.name} has none of the configured ${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : "Influence"} checks.`);
-    options = skills.map((skill) => `<option value="configured:${skill.id}">${esc(skill.label)}</option>`).join("");
+    options = skills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
   }
   new Dialog({
-    title: `${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : type.titleCase()} Check: ${npcName}`,
+    title: `Make a Check: ${npcName}`,
     content: `<form><p>${isResearch ? "Source" : "Target"}: <strong>${esc(npcName)}</strong></p>${isResearch && npc.requirements ? `<p class="hint"><strong>Requirements:</strong> ${esc(npc.requirements)}</p>` : ""}<div class="form-group"><label>Skill</label><select name="skill">${options}</select></div></form>`,
     buttons: { request: { icon: '<i class="fas fa-paper-plane"></i>', label: "Request Check", callback: (html) => {
       const selection = String(html.find('[name="skill"]').val());
@@ -3103,6 +3186,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-failure influence-discovery-failure"><strong>Discovery</strong><p>${esc(actorName)} failed to learn anything new about ${esc(npcName)}.</p></div>`, flags: { [MODULE_ID]: { messageKind: "result" } } });
   }
   if (request.type === "discovery" && !skill.invalidDiscovery && degree >= 2) await offerDiscovery(encounter, request.requesterId, degree === 3 ? 2 : 1, logEntry.id, actor.id);
+  await maybePromptRoundAdvance(Store.get(encounter.id));
   tracker.render(false);
 }
 
@@ -3216,6 +3300,7 @@ Hooks.once("ready", async () => {
     if (payload.action === "discovery-offer" && payload.userId === game.user.id) collectDiscoveryChoices(payload.choices, payload.actorId).then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
     if (payload.action === "discovery-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveDiscovery(payload.encounterId, payload.userId, payload.selections, payload.logEntryId);
     if (payload.action === "progress-clock-refresh") progressClockDatabase()?.refresh?.();
+    if (payload.action === "open-encounter") setTimeout(() => tracker?.render(true), 150);
     if (payload.action === "victory-splash") {
       const encounter = Store.get(payload.encounterId);
       if (encounter?.chaseOutcome === "victory") showVictorySplash(encounter);
@@ -3228,6 +3313,7 @@ Hooks.once("ready", async () => {
   });
   game[MODULE_ID] = { open: () => tracker.render(true), manage: () => new EncounterManager().render(true), Store };
   setTimeout(() => { renderInfluenceSidebar(); renderCinematicHud(); }, 250);
+  setTimeout(() => { const active = Store.get(); if (active?.status === "active") tracker?.render(true); }, 350);
   setTimeout(() => resumePendingDiscoveries(), 500);
 });
 

@@ -13,6 +13,8 @@ https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/latest/down
 ## Features
 
 - Skill Encounters with shared or per-PC scoring, automatic point goals or GM-decided outcomes, configurable round limits, and reusable challenges
+- Automatic player encounter opening, live character modifiers in check choices, and optional round-completion prompts
+- Party-size Chase balancing with preserved published CP values, manual outcomes, and a level-based DC reference
 - World-scoped encounter builder and reusable encounter records
 - Independent per-NPC Influence Points, Discovery and Influence skills, DCs, weaknesses, resistances, thresholds, and rewards
 - Player check requests with no written-response field

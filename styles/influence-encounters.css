@@ -211,3 +211,6 @@
   min-height: 2rem;
   white-space: normal;
 }
+.dc-reference-grid { width: 100%; border-collapse: collapse; }
+.dc-reference-grid th, .dc-reference-grid td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--color-border-light-tertiary, #7776); text-align: left; }
+.dc-reference-grid td { text-align: center; font-variant-numeric: tabular-nums; }

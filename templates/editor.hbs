@@ -24,13 +24,14 @@
         {{#if isSkill}}<label>Situation and Stakes<textarea name="skillDescription" placeholder="Describe what the party is trying to accomplish and what is at stake.">{{encounter.skillDescription}}</textarea></label>{{/if}}
       </fieldset>
       <fieldset><legend>Encounter Configuration</legend>
-        <div class="form-group"><label>Level</label><div class="form-fields"><input type="number" min="0" max="25" name="level" value="{{encounter.level}}"></div></div>
+        <div class="form-group"><label>Level</label><div class="form-fields"><input type="number" min="0" max="25" name="level" value="{{encounter.level}}"><button type="button" data-action="dcReference" title="Show PF2e DCs for this level"><i class="fa-solid fa-table-cells"></i> DC Reference</button></div></div>
         {{#if isResearch}}
         <div class="form-group"><label>Research Interval</label><div class="form-fields"><input type="number" min="1" name="researchInterval.value" value="{{encounter.researchInterval.value}}"><select name="researchInterval.unit">{{selectOptions intervalUnits selected=encounter.researchInterval.unit}}</select></div></div>
         <div class="form-group"><label>Current Shared RP</label><div class="form-fields"><input type="number" min="0" name="researchPoints" value="{{encounter.researchPoints}}"></div></div>
         {{else}}{{#if isChase}}
         <div class="form-group"><label>Chase Type</label><div class="form-fields"><select name="chaseType">{{selectOptions chaseTypes selected=encounter.chaseType}}</select></div></div>
         <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><label>Round Limit</label><input type="number" min="0" name="roundLimit" value="{{encounter.roundLimit}}"></div></div>
+        <div class="form-group"><label>Party Balancing</label><div class="form-fields"><label>Designed for</label><input type="number" min="1" name="chaseDesignedPartySize" value="{{encounter.chaseDesignedPartySize}}"><span class="units">PCs</span><button type="button" data-action="rebalanceChase"><i class="fa-solid fa-scale-balanced"></i> Recalculate All CP</button></div></div>
         <div class="form-group"><label>Subject Starting Obstacle</label><div class="form-fields"><select name="subjectStartPosition">{{selectOptions chasePositionOptions selected=encounter.subjectStartPosition}}</select></div></div>
         <div class="form-group"><label>Current Subject Obstacle</label><div class="form-fields"><select name="opponentPosition">{{selectOptions chasePositionOptions selected=encounter.opponentPosition}}</select></div></div>
         <p class="hint">The starting obstacle is used whenever a draft chase begins or an in-progress chase is duplicated. The current obstacle tracks live progress and can be corrected manually after an undo or other state change.</p>
@@ -38,6 +39,7 @@
         <div class="form-group"><label>Subject Acts</label><div class="form-fields"><select name="subjectTurnOrder">{{selectOptions subjectTurnOrders selected=encounter.subjectTurnOrder}}</select></div></div>
         <div class="form-group"><label>Obstacle Visibility</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="obscureFutureObstacles" {{checked encounter.obscureFutureObstacles}}> Obscure future obstacles from players</label></div></div>
         <p class="hint">Players see only completed obstacles and the current obstacle. The subject's exact position is replaced by a relative chase update.</p>
+        <div class="form-group"><label>Round Flow</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="promptAdvanceWhenAllActed" {{checked encounter.promptAdvanceWhenAllActed}}> Prompt the GM to advance after every participating PC acts</label></div></div>
         <div class="form-group"><label>DC Visibility</label><div class="form-fields"><select name="dcVisibility">{{selectOptions dcVisibilities selected=encounter.dcVisibility}}</select></div></div>
         <label>Victory Outcome<textarea name="victoryText">{{encounter.victoryText}}</textarea></label>
         <fieldset><legend>Victory Splash</legend>
@@ -48,6 +50,7 @@
         <label>Failure Outcome<textarea name="failureText">{{encounter.failureText}}</textarea></label>
         {{else}}{{#if isSkill}}
         <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><label>Round Limit</label><input type="number" min="1" name="roundLimit" value="{{encounter.roundLimit}}"></div></div>
+        <div class="form-group"><label>Round Flow</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="promptAdvanceWhenAllActed" {{checked encounter.promptAdvanceWhenAllActed}}> Prompt the GM to advance after every participating PC acts</label></div></div>
         <div class="form-group"><label>Point Tracking</label><div class="form-fields"><select name="skillScoringMode">{{selectOptions skillScoringModes selected=encounter.skillScoringMode}}</select></div></div>
         <div class="form-group"><label>Victory Condition</label><div class="form-fields"><select name="skillVictoryMode">{{selectOptions skillVictoryModes selected=encounter.skillVictoryMode}}</select></div></div>
         {{#unless individualSkillScoring}}<div class="form-group"><label>Shared Skill Points</label><div class="form-fields"><input type="number" min="0" name="skillPoints" value="{{encounter.skillPoints}}"></div></div>{{/unless}}
@@ -58,6 +61,7 @@
         <label>Failure Outcome<textarea name="failureText">{{encounter.failureText}}</textarea></label>
         {{else}}
         <div class="form-group"><label>Phases</label><div class="form-fields"><input type="number" min="1" name="phases" value="{{encounter.phases}}"></div></div>
+        <div class="form-group"><label>Phase Flow</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="promptAdvanceWhenAllActed" {{checked encounter.promptAdvanceWhenAllActed}}> Prompt the GM to advance after every participating PC acts</label></div></div>
         {{/if}}{{/if}}{{/if}}
         <div class="form-group"><label>Global Progress Clocks</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="progressClock.enabled" {{checked encounter.progressClock.enabled}} {{#unless progressClockAvailable}}disabled{{/unless}} {{#unless progressClockSupported}}disabled{{/unless}}> {{#if isResearch}}Keep a persistent public RP tracker{{else}}{{#if isSkill}}Keep a persistent public SP tracker{{else}}Keep a persistent public IP tracker for each target{{/if}}{{/if}}</label></div></div>
         {{#unless progressClockAvailable}}<p class="hint">Enable the optional Global Progress Clocks module to use this feature. Encounters work normally without it.</p>{{/unless}}
@@ -94,7 +98,8 @@
         <label>Source Description<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
         <div class="trait-grid"><label>Critical Failure<input type="number" name="npcs.{{@index}}.awards.criticalFailure" value="{{awards.criticalFailure}}"></label><label>Failure<input type="number" name="npcs.{{@index}}.awards.failure" value="{{awards.failure}}"></label><label>Success<input type="number" name="npcs.{{@index}}.awards.success" value="{{awards.success}}"></label><label>Critical Success<input type="number" name="npcs.{{@index}}.awards.criticalSuccess" value="{{awards.criticalSuccess}}"></label></div>
         {{else}}{{#if @root.isChase}}
-        <div class="form-group"><label>Chase Points Required</label><div class="form-fields"><input type="number" min="1" name="npcs.{{@index}}.maximumPoints" value="{{maximumPoints}}"></div></div>
+        <div class="form-group"><label>Base Chase Points</label><div class="form-fields"><input type="number" min="1" name="npcs.{{@index}}.baseMaximumPoints" value="{{baseMaximumPoints}}"><span class="units">published/default</span></div></div>
+        <div class="form-group"><label>Balanced Chase Points</label><div class="form-fields"><input type="number" min="1" name="npcs.{{@index}}.maximumPoints" value="{{maximumPoints}}"><span class="units">used during play</span></div></div>
         <label>Obstacle Description<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
         <label>Special Rules / Conditional Bonuses<textarea name="npcs.{{@index}}.requirements">{{requirements}}</textarea></label>
         {{else}}{{#if @root.isSkill}}
