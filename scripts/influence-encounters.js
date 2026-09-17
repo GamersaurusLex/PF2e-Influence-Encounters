@@ -1600,7 +1600,9 @@ function renderInfluenceSidebar() {
     item.innerHTML = '<button type="button" class="ui-control plain icon fa-solid fa-comments" data-tab="influence-encounters" role="tab" aria-pressed="false" aria-label="Influence Encounter" data-tooltip="Influence Encounter"></button><div class="notification-pip"></div>';
     tabButton = item.querySelector("button");
     tabButton.addEventListener("click", activateInfluenceSidebar);
-    tabsMenu.insertBefore(item, tabsMenu.lastElementChild);
+    const journalItem = tabsMenu.querySelector('[data-tab="journal"]')?.closest("li");
+    if (journalItem) journalItem.after(item);
+    else tabsMenu.insertBefore(item, tabsMenu.lastElementChild);
   }
   let panel = document.getElementById("influence-encounters-sidebar");
   if (!panel) {

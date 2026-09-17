@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Moved the Influence Encounters sidebar button directly below Foundry's Journal tab, matching the D&D module's placement.
+
 ## 0.7.1 — 2026-09-15
 
 - Added an optional player-facing list of available checks for each Research source, independent Research DC visibility controls, and per-check guidance text for explaining how each skill applies.
