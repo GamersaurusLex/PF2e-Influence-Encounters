@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.2 — 2026-09-17
 
 - Moved the Influence Encounters sidebar button directly below Foundry's Journal tab, matching the D&D module's placement.
 
