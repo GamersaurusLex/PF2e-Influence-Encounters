@@ -1,6 +1,15 @@
 const MODULE_ID = "influence-encounters";
 const SOCKET = `module.${MODULE_ID}`;
-const SETTINGS = { encounters: "encounters", active: "activeEncounter", folders: "encounterFolders", selections: "userSelections" };
+const REMOTE_HIGHLIGHT_MODULE_ID = "remote-highlight-ui";
+const REMOTE_HIGHLIGHT_SOCKET = `module.${REMOTE_HIGHLIGHT_MODULE_ID}`;
+const INFLUENCE_SIDEBAR_TAB_SELECTOR = '#sidebar-tabs [data-tab="influence-encounters"]';
+const SETTINGS = {
+  encounters: "encounters",
+  active: "activeEncounter",
+  folders: "encounterFolders",
+  selections: "userSelections",
+  highlightOnActivation: "highlightOnActivation"
+};
 const { Application, Dialog } = foundry.appv1.api;
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -347,6 +356,8 @@ function normalizeEncounterCollections(encounter) {
     npc.background ??= "";
     npc.appearance ??= "";
     npc.personality ??= "";
+    // Research sources can set the scene without replacing their own portrait.
+    npc.cinematicBackgroundImage ??= "";
     npc.points = Number(npc.points ?? encounter.points) || 0;
     npc.maximumPoints = Math.max(0, Number(npc.maximumPoints) || 0);
     npc.baseMaximumPoints = Math.max(0, Number(npc.baseMaximumPoints ?? npc.maximumPoints) || 0);
@@ -1085,6 +1096,35 @@ function canUserControlActor(actor, user = game.user) {
   return !!actor?.testUserPermission?.(user, CONST.DOCUMENT_OWNERSHIP_LEVELS.OWNER);
 }
 
+function remoteHighlightIntegrationActive() {
+  return game.modules.get(REMOTE_HIGHLIGHT_MODULE_ID)?.active
+    && game.settings.get(MODULE_ID, SETTINGS.highlightOnActivation);
+}
+
+/**
+ * Guide participating players to this module's native sidebar tab when an
+ * encounter begins. Remote Highlight UI does not currently expose an API, so
+ * this deliberately limits our optional adapter to its small socket message
+ * shape and only runs while that module is active.
+ */
+function highlightEncounterSidebarForParticipants(encounter) {
+  if (!game.user.isGM || !encounter || !remoteHighlightIntegrationActive()) return;
+  const recipientIds = new Set();
+  for (const actor of encounterParticipants(encounter)) {
+    for (const user of game.users) {
+      if (!user.active || user.isGM || !canUserControlActor(actor, user)) continue;
+      recipientIds.add(user.id);
+    }
+  }
+  for (const playerId of recipientIds) {
+    game.socket.emit(REMOTE_HIGHLIGHT_SOCKET, {
+      type: "HIGHLIGHT_ELEMENT",
+      selector: INFLUENCE_SIDEBAR_TAB_SELECTOR,
+      playerId
+    });
+  }
+}
+
 function encounterViewSelection(encounter) {
   if (!encounter) return { actorId: "", npcId: "" };
   if (game.user.isGM) {
@@ -1326,6 +1366,7 @@ class InfluenceTracker extends Application {
         await setEncounterViewSelection(encounter, { npcId });
         this.render(false);
         renderInfluenceSidebar();
+        renderCinematicHud();
       }
       return this.render(false);
     }
@@ -1519,7 +1560,12 @@ function renderCinematicHud() {
     return;
   }
   const actor = game.actors.get(encounter.activeActorId);
-  const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId) ?? encounter.npcs[0];
+  // Research sources are individually selectable on player clients, so each
+  // viewer sees the location associated with the source they are reviewing.
+  const selectedNpcId = encounter.subsystemType === "research"
+    ? encounterViewSelection(encounter).npcId
+    : encounter.activeNpcId;
+  const npc = encounter.npcs.find((entry) => entry.id === selectedNpcId) ?? encounter.npcs[0];
   const actorName = participantDisplayName(encounter, actor);
   const npcName = targetDisplayName(npc);
   const isChase = encounter.subsystemType === "chase";
@@ -1532,9 +1578,12 @@ function renderCinematicHud() {
   const subject = encounter.chaseSubject ?? {};
   const subjectName = String(subject.nickname ?? "").trim() || subject.name || "Chase Objective";
   const subjectHtml = `<figure class="influence-speaker influence-speaker-subject"><img src="${esc(subject.image || "icons/svg/mystery-man.svg")}" alt="${esc(subjectName)}"><figcaption><small>${esc(subject.label || "Objective")}</small>${esc(subjectName)}</figcaption></figure>`;
+  const cinematicBackground = encounter.subsystemType === "research"
+    ? (npc?.cinematicBackgroundImage || encounter.backgroundImage)
+    : encounter.backgroundImage;
   hud.className = "visible";
   hud.style.setProperty("--influence-blur", `${Number(encounter.backgroundBlur) || 0}px`);
-  hud.innerHTML = `<div class="influence-cinematic-backdrop"${encounter.backgroundImage ? ` style="background-image:url('${esc(encounter.backgroundImage)}')"` : ""}></div><div class="influence-cinematic-stage ${isChase ? "chase" : ""}">${actorHtml}<div class="influence-conversation-mark"><i class="fa-solid ${isChase ? "fa-arrow-right" : "fa-comments"}"></i></div>${npcHtml}${isChase ? `<div class="influence-conversation-mark"><i class="fa-solid fa-arrow-right"></i></div>${subjectHtml}` : ""}</div>`;
+  hud.innerHTML = `<div class="influence-cinematic-backdrop"${cinematicBackground ? ` style="background-image:url('${esc(cinematicBackground)}')"` : ""}></div><div class="influence-cinematic-stage ${isChase ? "chase" : ""}">${actorHtml}<div class="influence-conversation-mark"><i class="fa-solid ${isChase ? "fa-arrow-right" : "fa-comments"}"></i></div>${npcHtml}${isChase ? `<div class="influence-conversation-mark"><i class="fa-solid fa-arrow-right"></i></div>${subjectHtml}` : ""}</div>`;
 }
 
 function showVictorySplash(encounter) {
@@ -2039,6 +2088,8 @@ async function activateEncounter(id) {
   renderInfluenceSidebar();
   renderCinematicHud();
   game.socket.emit(SOCKET, { action: "open-encounter", encounterId: id });
+  // Let receiving clients finish their encounter refresh before the guidance cue.
+  setTimeout(() => highlightEncounterSidebarForParticipants(encounter), 250);
 }
 
 async function pauseEncounter(id) {
@@ -2068,6 +2119,7 @@ async function resumeEncounter(id) {
   renderInfluenceSidebar();
   renderCinematicHud();
   game.socket.emit(SOCKET, { action: "open-encounter", encounterId: id });
+  setTimeout(() => highlightEncounterSidebarForParticipants(encounter), 250);
 }
 
 async function duplicateEncounter(id) {
@@ -2233,6 +2285,7 @@ async function handleSidebarAction(event) {
     await setEncounterViewSelection(encounter, { npcId: event.currentTarget.dataset.id });
     renderInfluenceSidebar();
     tracker?.render(false);
+    renderCinematicHud();
     return;
   }
   if (!game.user.isGM) return;
@@ -2526,7 +2579,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
         const image = dropped.src || dropped.img || dropped.parent?.img || "icons/svg/book.svg";
         const created = { id: randomID(), actorId: "", sourceUuid: dropped.uuid, name: dropped.name || "Research Source", image, points: 0, maximumPoints: 4,
           availability: "available", requirements: "", researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
-          background: "", appearance: "", personality: "", discovery: [], influence: [], thresholds: [] };
+          background: "", appearance: "", personality: "", cinematicBackgroundImage: "", discovery: [], influence: [], thresholds: [] };
         this.encounter.npcs.push(created);
         this.encounter.activeNpcId = created.id;
         this._dirty = true;
@@ -2538,7 +2591,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       const research = this.encounter.subsystemType === "research";
       const created = { id: randomID(), actorId: actor.id, name: actor.name, image: participantPortrait(actor), points: 0,
         maximumPoints: research ? 4 : 0, availability: "available", requirements: "", researchInterval: "", awards: { criticalFailure: -1, failure: 0, success: 1, criticalSuccess: 2 },
-        background: "", appearance: "", personality: "", discovery: deepClone(DEFAULT_ENCOUNTER.discovery.slice(0, 2)), influence: [], thresholds: [],
+        background: "", appearance: "", personality: "", cinematicBackgroundImage: "", discovery: deepClone(DEFAULT_ENCOUNTER.discovery.slice(0, 2)), influence: [], thresholds: [],
         weakness: { label: "Weakness", description: "", value: 0, type: "circumstance", mode: "roll" },
         strength: { label: "Resistance", description: "", value: 0, type: "circumstance", mode: "roll" } };
       const placeholder = this.encounter.npcs.length === 1 && isGeneratedPlaceholderNpc(this.encounter, this.encounter.npcs[0]);
@@ -3296,6 +3349,16 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, SETTINGS.active, { scope: "world", config: false, type: String, default: "" });
   game.settings.register(MODULE_ID, SETTINGS.folders, { scope: "world", config: false, type: Array, default: [] });
   game.settings.register(MODULE_ID, SETTINGS.selections, { scope: "client", config: false, type: Object, default: {} });
+  game.settings.register(MODULE_ID, SETTINGS.highlightOnActivation, {
+    name: "Guide participants to the encounter tab",
+    hint: "When Remote Highlight UI is active, spotlight the Influence Encounter sidebar tab for owners of participating PCs when an encounter is activated or resumed.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: true,
+    restricted: true,
+    requiresReload: false
+  });
   loadTemplates([`modules/${MODULE_ID}/templates/trait-fields.hbs`]);
 });
 

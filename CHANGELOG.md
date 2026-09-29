@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.3 — 2026-09-29
+
+- Added an optional Remote Highlight UI integration that guides connected owners of participating PCs to the Influence Encounter sidebar tab whenever an encounter is activated or resumed.
+- Added an optional file-picked cinematic background for each Research source. Source-specific background art now appears whenever that source is selected; blank source backgrounds fall back to the encounter default.
+- Player-side Research source selection now updates the cinematic backdrop for that player.
+
 ## 0.7.2 — 2026-09-17
 
 - Moved the Influence Encounters sidebar button directly below Foundry's Journal tab, matching the D&D module's placement.
