@@ -2,7 +2,7 @@ const MODULE_ID = "influence-encounters";
 const SOCKET = `module.${MODULE_ID}`;
 const REMOTE_HIGHLIGHT_MODULE_ID = "remote-highlight-ui";
 const REMOTE_HIGHLIGHT_SOCKET = `module.${REMOTE_HIGHLIGHT_MODULE_ID}`;
-const INFLUENCE_SIDEBAR_TAB_SELECTOR = '#sidebar-tabs [data-tab="influence-encounters"]';
+const INFLUENCE_SCENE_CONTROL_SELECTOR = "#scene-controls-tools .influence-control";
 const SETTINGS = {
   encounters: "encounters",
   active: "activeEncounter",
@@ -1102,12 +1102,12 @@ function remoteHighlightIntegrationActive() {
 }
 
 /**
- * Guide participating players to this module's native sidebar tab when an
+ * Guide participating players to this module's native canvas control when an
  * encounter begins. Remote Highlight UI does not currently expose an API, so
  * this deliberately limits our optional adapter to its small socket message
  * shape and only runs while that module is active.
  */
-function highlightEncounterSidebarForParticipants(encounter) {
+function highlightEncounterControlForParticipants(encounter) {
   if (!game.user.isGM || !encounter || !remoteHighlightIntegrationActive()) return;
   const recipientIds = new Set();
   for (const actor of encounterParticipants(encounter)) {
@@ -1119,7 +1119,7 @@ function highlightEncounterSidebarForParticipants(encounter) {
   for (const playerId of recipientIds) {
     game.socket.emit(REMOTE_HIGHLIGHT_SOCKET, {
       type: "HIGHLIGHT_ELEMENT",
-      selector: INFLUENCE_SIDEBAR_TAB_SELECTOR,
+      selector: INFLUENCE_SCENE_CONTROL_SELECTOR,
       playerId
     });
   }
@@ -2089,7 +2089,7 @@ async function activateEncounter(id) {
   renderCinematicHud();
   game.socket.emit(SOCKET, { action: "open-encounter", encounterId: id });
   // Let receiving clients finish their encounter refresh before the guidance cue.
-  setTimeout(() => highlightEncounterSidebarForParticipants(encounter), 250);
+  setTimeout(() => highlightEncounterControlForParticipants(encounter), 250);
 }
 
 async function pauseEncounter(id) {
@@ -2119,7 +2119,7 @@ async function resumeEncounter(id) {
   renderInfluenceSidebar();
   renderCinematicHud();
   game.socket.emit(SOCKET, { action: "open-encounter", encounterId: id });
-  setTimeout(() => highlightEncounterSidebarForParticipants(encounter), 250);
+  setTimeout(() => highlightEncounterControlForParticipants(encounter), 250);
 }
 
 async function duplicateEncounter(id) {
@@ -3350,8 +3350,8 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, SETTINGS.folders, { scope: "world", config: false, type: Array, default: [] });
   game.settings.register(MODULE_ID, SETTINGS.selections, { scope: "client", config: false, type: Object, default: {} });
   game.settings.register(MODULE_ID, SETTINGS.highlightOnActivation, {
-    name: "Guide participants to the encounter tab",
-    hint: "When Remote Highlight UI is active, spotlight the Influence Encounter sidebar tab for owners of participating PCs when an encounter is activated or resumed.",
+    name: "Guide participants to the encounter control",
+    hint: "When Remote Highlight UI is active, spotlight the left canvas Influence Encounter control for owners of participating PCs when an encounter is activated or resumed.",
     scope: "world",
     config: true,
     type: Boolean,

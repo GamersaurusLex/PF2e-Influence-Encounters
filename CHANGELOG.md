@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.4 — 2026-09-29
+
+- Fixed the optional Remote Highlight UI integration to spotlight the left canvas Influence Encounter control rather than the right-side encounter directory tab.
+
 ## 0.7.3 — 2026-09-29
 
 - Added an optional Remote Highlight UI integration that guides connected owners of participating PCs to the Influence Encounter sidebar tab whenever an encounter is activated or resumed.
