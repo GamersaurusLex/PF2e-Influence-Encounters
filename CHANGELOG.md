@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.5 — 2026-09-29
+
+- Pausing an encounter now closes its tracker window for the GM and every player client while preserving the paused encounter for later resumption.
+- Added an Open for Players control to the active GM tracker. It reopens the tracker for connected non-GM users who own a participating PC.
+
 ## 0.7.4 — 2026-09-29
 
 - Fixed the optional Remote Highlight UI integration to spotlight the left canvas Influence Encounter control rather than the right-side encounter directory tab.

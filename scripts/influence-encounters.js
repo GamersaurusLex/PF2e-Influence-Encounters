@@ -1101,6 +1101,18 @@ function remoteHighlightIntegrationActive() {
     && game.settings.get(MODULE_ID, SETTINGS.highlightOnActivation);
 }
 
+function activeParticipantOwnerIds(encounter) {
+  if (!encounter) return [];
+  const recipientIds = new Set();
+  for (const actor of encounterParticipants(encounter)) {
+    for (const user of game.users) {
+      if (!user.active || user.isGM || !canUserControlActor(actor, user)) continue;
+      recipientIds.add(user.id);
+    }
+  }
+  return [...recipientIds];
+}
+
 /**
  * Guide participating players to this module's native canvas control when an
  * encounter begins. Remote Highlight UI does not currently expose an API, so
@@ -1109,20 +1121,21 @@ function remoteHighlightIntegrationActive() {
  */
 function highlightEncounterControlForParticipants(encounter) {
   if (!game.user.isGM || !encounter || !remoteHighlightIntegrationActive()) return;
-  const recipientIds = new Set();
-  for (const actor of encounterParticipants(encounter)) {
-    for (const user of game.users) {
-      if (!user.active || user.isGM || !canUserControlActor(actor, user)) continue;
-      recipientIds.add(user.id);
-    }
-  }
-  for (const playerId of recipientIds) {
+  for (const playerId of activeParticipantOwnerIds(encounter)) {
     game.socket.emit(REMOTE_HIGHLIGHT_SOCKET, {
       type: "HIGHLIGHT_ELEMENT",
       selector: INFLUENCE_SCENE_CONTROL_SELECTOR,
       playerId
     });
   }
+}
+
+function openEncounterForParticipants(encounter) {
+  if (!game.user.isGM || !encounter || encounter.status !== "active") return;
+  const userIds = activeParticipantOwnerIds(encounter);
+  if (!userIds.length) return ui.notifications.warn("No connected player owns a participating PC.");
+  game.socket.emit(SOCKET, { action: "open-encounter", encounterId: encounter.id, userIds });
+  ui.notifications.info(`Opened the encounter for ${userIds.length} participating player${userIds.length === 1 ? "" : "s"}.`);
 }
 
 function encounterViewSelection(encounter) {
@@ -1319,6 +1332,7 @@ class InfluenceTracker extends Application {
           npcName: queuedNpc ? targetDisplayName(queuedNpc) : "Missing target", skillLabel: queuedSkill?.label ?? request.skillLabel ?? "Missing skill" };
       }) : [],
       isGM: game.user.isGM, showPoints: game.user.isGM || encounter?.publicPoints, noEncounter: !encounter, isPaused: encounter?.status === "paused",
+      canOpenForPlayers: game.user.isGM && encounter?.status === "active",
       canAct: !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !encounter.skillOutcome && !!selection.actorId && sourceAvailable,
       canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused",
       canTriggerVictorySplash: game.user.isGM && isChase && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual",
@@ -1380,6 +1394,7 @@ class InfluenceTracker extends Application {
       return request ? adjudicate(request) : ui.notifications.warn("That queued check is no longer available.");
     }
     if (action === "cancel-request") return cancelPendingCheck(encounter.id, event.currentTarget.dataset.id, "The GM canceled this check request.");
+    if (action === "open-for-players") return openEncounterForParticipants(encounter);
     if (action === "pause") return pauseEncounter(encounter.id);
     if (action === "resume") return resumeEncounter(encounter.id);
     if (action === "victory-splash") return triggerVictorySplash(encounter);
@@ -2100,10 +2115,10 @@ async function pauseEncounter(id) {
   encounter.presentationVisible = false;
   await Store.setActive(id);
   await Store.save(encounter);
-  tracker?.render(false);
+  await tracker?.close();
   renderInfluenceSidebar();
   renderCinematicHud();
-  game.socket.emit(SOCKET, { action: "refresh" });
+  game.socket.emit(SOCKET, { action: "close-encounter", encounterId: id });
 }
 
 async function resumeEncounter(id) {
@@ -3372,7 +3387,8 @@ Hooks.once("ready", async () => {
     if (payload.action === "discovery-offer" && payload.userId === game.user.id) collectDiscoveryChoices(payload.choices, payload.actorId).then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
     if (payload.action === "discovery-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveDiscovery(payload.encounterId, payload.userId, payload.selections, payload.logEntryId);
     if (payload.action === "progress-clock-refresh") progressClockDatabase()?.refresh?.();
-    if (payload.action === "open-encounter") setTimeout(() => tracker?.render(true), 150);
+    if (payload.action === "open-encounter" && (!payload.userIds || payload.userIds.includes(game.user.id))) setTimeout(() => tracker?.render(true), 150);
+    if (payload.action === "close-encounter" && (!payload.encounterId || payload.encounterId === Store.activeId())) tracker?.close();
     if (payload.action === "victory-splash") {
       const encounter = Store.get(payload.encounterId);
       if (encounter?.chaseOutcome === "victory") showVictorySplash(encounter);
