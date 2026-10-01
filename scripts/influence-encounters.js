@@ -26,6 +26,7 @@ const PF2E_SKILLS = [
 
 const PF2E_SAVES = ["Fortitude Save", "Reflex Save", "Will Save"];
 const PF2E_SAVE_SLUGS = { "fortitude save": "fortitude", "reflex save": "reflex", "will save": "will" };
+const SF2E_SKILLS = ["Computers", "Piloting"];
 
 const PF2E_LORE_SKILLS = [
   "Academia Lore", "Accounting Lore", "Architecture Lore", "Art Lore", "Astronomy Lore", "Carpentry Lore",
@@ -66,6 +67,151 @@ function skillSlug(label = "") {
 function parsedSkill(label, dc, type) {
   const cleanLabel = String(label).replace(/\([^)]*\)/g, "").replace(/^\s*[,;:]\s*/, "").trim();
   return { id: randomID(), label: cleanLabel, slug: skillSlug(cleanLabel), description: "", dc: Number(dc), dcModified: true, lore: /\blore$/i.test(cleanLabel), secret: false };
+}
+
+function starshipActivity(id, label, skills, dc, description, options = {}) {
+  const { allowLore = false, ...extra } = options;
+  return { id, label, skills, dc, description, allowLore, ...extra };
+}
+
+function defaultStarshipData() {
+  return {
+    stage: "role-selection",
+    roleSelections: {},
+    actionSelections: {},
+    countdown: { value: 0, limit: 7 },
+    ships: {
+      primorata: { actorId: "", name: "Primorata", image: "icons/svg/wing.svg", hp: 95, maxHp: 95, shields: 9, shieldRefresh: 9, ac: 24, fortitude: 14, reflex: 17 },
+      heart: { actorId: "", name: "The Heart", image: "icons/svg/target.svg", hp: 85, maxHp: 85, shields: 5, shieldRefresh: 5, ac: 21, fortitude: 0, reflex: 0, fireWeakness: 5 }
+    },
+    modifiers: [
+      { id: "attack-run", label: "Attack Run", value: 1, type: "circumstance", description: "Pilot-created opening; set the final value for its degree of success." },
+      { id: "boost-systems", label: "Boost Systems", value: 2, type: "circumstance", description: "Engineer boost to Piloting or Computers." },
+      { id: "stabilize-geometry", label: "Stabilize Geometry", value: 2, type: "circumstance", description: "Magic Officer bonus to Plot Exit." },
+      { id: "captain-coordination", label: "Captain Coordination", value: 1, type: "circumstance", description: "Captain-provided crew bonus." },
+      { id: "planar-ward", label: "Planar Ward", value: 2, type: "status", description: "Magic Officer bonus to the next pulse save." }
+    ],
+    roles: [
+      { id: "captain", label: "Captain", capacity: 1, activities: [
+        starshipActivity("rally", "Rally", ["diplomacy", "intimidation"], 22, "Bolster the crew."),
+        starshipActivity("execute-contingency", "Execute Contingency", ["diplomacy", "intimidation"], 22, "Set up a decisive reroll."),
+        starshipActivity("coordinate-wing-strike", "Coordinate Wing Strike", ["diplomacy", "intimidation"], 22, "Coordinate the ship's supporting fire."),
+        starshipActivity("direct-damage-control", "Direct Damage Control", ["diplomacy", "intimidation"], 22, "Direct emergency repairs.")
+      ] },
+      { id: "pilot", label: "Pilot", capacity: 1, activities: [
+        starshipActivity("attack-run", "Attack Run", ["piloting"], 22, "Create an opening for the gunners."),
+        starshipActivity("evasive-spiral", "Evasive Spiral", ["piloting"], 22, "Put the ship in a defensive position."),
+        starshipActivity("skim", "Skim", ["piloting"], 24, "Ride the fracture current."),
+        starshipActivity("plot-exit", "Plot Exit", ["piloting"], 22, "Bank an Escape Point.")
+      ] },
+      { id: "engineer", label: "Engineer", capacity: 1, activities: [
+        starshipActivity("damage-control", "Damage Control", ["crafting", "athletics"], 22, "Repair hull or reinforce shields."),
+        starshipActivity("overcharge", "Overcharge", ["crafting"], 22, "Overcharge the next ship strike."),
+        starshipActivity("boost-systems", "Boost Systems", ["crafting"], 22, "Improve the pilot or science officer's next check.")
+      ] },
+      { id: "gunner", label: "Gunner", capacity: 2, activities: [
+        starshipActivity("plasma-battery", "Plasma Battery", ["simple-ranged"], 21, "Fire the Primorata's plasma battery.", { damage: "2d8+8", damageType: "fire", target: "heart" }),
+        starshipActivity("shieldbreaker", "Shieldbreaker", ["simple-ranged"], 21, "Fire a shield-piercing electrical salvo.", { damage: "2d6+6", damageType: "electricity", target: "heart", ignoresShields: true }),
+        starshipActivity("suppress", "Suppress", ["simple-ranged"], 21, "Suppress the Heart's next pulse.", { damage: "2d6+6", damageType: "fire", target: "heart" }),
+        starshipActivity("called-core", "Called Shot: Core", ["simple-ranged"], 24, "Fire directly at the exposed core.", { damage: "2d10+10", damageType: "fire", target: "heart", ignoresShields: true })
+      ] },
+      { id: "science", label: "Science Officer", capacity: 1, activities: [
+        starshipActivity("analyze-fracture", "Analyze Fracture", ["computers", "crafting"], 22, "Analyze the Heart's defenses.", { allowLore: true }),
+        starshipActivity("disrupt-shield-cycling", "Disrupt Shield Cycling", ["computers", "crafting"], 22, "Disrupt the shield refresh.", { allowLore: true }),
+        starshipActivity("interrupt-overwrite", "Interrupt Overwrite", ["computers", "crafting"], 22, "Hold back the countdown.", { allowLore: true }),
+        starshipActivity("locate-tope", "Locate Tope", ["computers", "crafting"], 22, "Trace Tope through the anomaly.", { allowLore: true })
+      ] },
+      { id: "magic", label: "Magic Officer", capacity: 1, activities: [
+        starshipActivity("planar-ward", "Planar Ward", ["arcana", "nature", "occultism", "religion"], 22, "Ward the crew against the pulse."),
+        starshipActivity("turn-current", "Turn Current", ["arcana", "nature", "occultism", "religion"], 24, "Turn the fracture current against the Heart."),
+        starshipActivity("phase-shot", "Phase Shot", ["arcana", "nature", "occultism", "religion"], 22, "Prepare a shield-piercing strike."),
+        starshipActivity("stabilize-geometry", "Stabilize Geometry", ["arcana", "nature", "occultism", "religion"], 22, "Stabilize the escape route.")
+      ] }
+    ]
+  };
+}
+
+function starshipDifficulty(dc, level) {
+  const difference = Number(dc) - levelBasedDC(level);
+  return difference <= -2 ? "Easy" : difference <= 0 ? "Average" : difference <= 2 ? "Hard" : "Extremely Hard";
+}
+
+function shipHullStatus(ship) {
+  const percentage = Math.max(0, Math.min(100, (Number(ship?.hp) || 0) / Math.max(1, Number(ship?.maxHp) || 1) * 100));
+  if (percentage >= 100) return "Undamaged";
+  if (percentage >= 75) return "Lightly Damaged";
+  if (percentage >= 50) return "Damaged";
+  if (percentage >= 25) return "Heavily Damaged";
+  if (percentage >= 10) return "Severely Damaged";
+  return "Critically Damaged";
+}
+
+function starshipRole(encounter, roleId) {
+  return encounter?.starship?.roles?.find((role) => role.id === roleId) ?? null;
+}
+
+function starshipActivityFor(encounter, roleId, activityId) {
+  return starshipRole(encounter, roleId)?.activities?.find((activity) => activity.id === activityId) ?? null;
+}
+
+function starshipActivityChoices(actor, activity) {
+  if (!actor || !activity) return [];
+  const choices = trainedSkillChoices(actor);
+  // Starship scenes routinely reward unexpected expertise. Every non-gunner
+  // crew activity offers the acting PC's trained Lore skills; the GM approves
+  // the narrative fit during the normal adjudication step.
+  const allowed = choices.filter((skill) => activity.skills.includes(skill.slug) || (!activity.skills.includes("simple-ranged") && skill.lore));
+  if (activity.skills.includes("simple-ranged")) {
+    const statistic = actor.getStatistic?.("simple-ranged");
+    return statistic?.roll ? [{ slug: "simple-ranged", label: "Simple Ranged Weapons", lore: false, rank: Number(statistic.rank) || 1 }] : [];
+  }
+  return allowed;
+}
+
+function starshipTrackerContext(encounter) {
+  const participants = encounterParticipants(encounter);
+  const selection = encounterViewSelection(encounter);
+  const selectedActor = participants.find((actor) => actor.id === selection.actorId) ?? null;
+  const controlledActors = participants
+    .filter((actor) => game.user.isGM || canUserControlActor(actor))
+    .map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), selected: actor.id === selectedActor?.id, acted: !!encounter.actorsActed?.[actor.id] }));
+  const starship = encounter.starship;
+  const roleEntries = starship.roles.map((role) => {
+    const assignments = participants.filter((actor) => starship.roleSelections[actor.id] === role.id)
+      .map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor) }));
+    const selected = starship.roleSelections[selectedActor?.id] === role.id;
+    return { ...role, assignments, openSeats: Math.max(0, Number(role.capacity) - assignments.length), selected, claimDisabled: !selected && assignments.length >= Number(role.capacity) };
+  });
+  const selectedRoleId = starship.roleSelections[selectedActor?.id] ?? "";
+  const selectedRole = starshipRole(encounter, selectedRoleId);
+  const selectedActionId = starship.actionSelections[selectedActor?.id]?.activityId ?? "";
+  const selectedSkillSlug = starship.actionSelections[selectedActor?.id]?.skillSlug ?? "";
+  const activities = (selectedRole?.activities ?? []).map((activity) => ({
+    ...activity,
+    selected: activity.id === selectedActionId,
+    difficulty: starshipDifficulty(activity.dc, encounter.level),
+    choices: starshipActivityChoices(selectedActor, activity).map((skill) => ({ ...skill, selected: skill.slug === selectedSkillSlug }))
+  }));
+  const roleSelectionComplete = participants.length > 0 && participants.every((actor) => !!starship.roleSelections[actor.id]);
+  const finished = Object.values(starship.ships).some((ship) => Number(ship.hp) <= 0) || starship.countdown.value >= starship.countdown.limit;
+  const pendingChecks = game.user.isGM ? (encounter.pendingChecks ?? []).map((request, index) => {
+    const actor = game.actors.get(request.actorId);
+    const activity = starshipActivityFor(encounter, request.roleId, request.activityId);
+    return { ...request, position: index + 1, actorName: actor ? participantDisplayName(encounter, actor) : "Missing PC", npcName: starship.ships.heart.name, skillLabel: request.skillLabel ?? "Unknown statistic", activityLabel: activity?.label ?? "Starship action" };
+  }) : [];
+  return {
+    encounter, starship, isStarship: true, isGM: game.user.isGM, noEncounter: false, isPaused: encounter.status === "paused",
+    primorata: { ...starship.ships.primorata, hullStatus: shipHullStatus(starship.ships.primorata) },
+    heart: { ...starship.ships.heart, hullStatus: shipHullStatus(starship.ships.heart) },
+    actors: participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter.actorsActed?.[actor.id], roleLabel: starshipRole(encounter, starship.roleSelections[actor.id])?.label ?? "Unassigned" })),
+    checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry, typeLabel: entry.type === "starship" ? "Crew Action" : entry.type, displayOutcome: entry.outcome })),
+    controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, finished, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
+    canClaimRole: encounter.status === "active" && starship.stage === "role-selection" && !!selectedActor,
+    canStartStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "role-selection" && !finished,
+    canTakeStarshipAction: encounter.status === "active" && starship.stage === "actions" && !!selectedActor && !!selectedRole && !!selectedActionId && !!selectedSkillSlug && !encounter.actorsActed?.[selectedActor.id] && !finished,
+    canNextStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "actions" && !encounter.pendingChecks?.length && !finished,
+    canPause: game.user.isGM && encounter.status === "active", canResume: game.user.isGM && encounter.status === "paused", canOpenForPlayers: game.user.isGM && encounter.status === "active"
+  };
 }
 
 function parseDcSkills(text, type) {
@@ -270,7 +416,32 @@ function isGeneratedPlaceholderNpc(encounter, npc) {
 }
 
 function normalizeEncounterCollections(encounter) {
-  encounter.subsystemType = ["influence", "research", "chase", "skill"].includes(encounter.subsystemType) ? encounter.subsystemType : "influence";
+  encounter.subsystemType = ["influence", "research", "chase", "skill", "starship"].includes(encounter.subsystemType) ? encounter.subsystemType : "influence";
+  if (encounter.subsystemType === "starship") {
+    const defaults = defaultStarshipData();
+    encounter.starship = foundry.utils.mergeObject(defaults, encounter.starship ?? {}, { inplace: false, overwrite: true });
+    encounter.starship.stage = ["role-selection", "actions"].includes(encounter.starship.stage) ? encounter.starship.stage : "role-selection";
+    encounter.starship.roleSelections = encounter.starship.roleSelections && typeof encounter.starship.roleSelections === "object" ? encounter.starship.roleSelections : {};
+    encounter.starship.actionSelections = encounter.starship.actionSelections && typeof encounter.starship.actionSelections === "object" ? encounter.starship.actionSelections : {};
+    encounter.starship.countdown.value = Math.max(0, Number(encounter.starship.countdown.value) || 0);
+    encounter.starship.countdown.limit = Math.max(1, Number(encounter.starship.countdown.limit) || 7);
+    for (const ship of Object.values(encounter.starship.ships)) {
+      ship.actorId ||= "";
+      ship.maxHp = Math.max(1, Number(ship.maxHp) || 1);
+      ship.hp = Math.max(0, Math.min(ship.maxHp, Number(ship.hp) || 0));
+      ship.shields = Math.max(0, Number(ship.shields) || 0);
+      ship.shieldRefresh = Math.max(0, Number(ship.shieldRefresh) || 0);
+    }
+    for (const role of encounter.starship.roles) {
+      role.capacity = Math.max(1, Number(role.capacity) || 1);
+      role.activities = indexedArray(role.activities);
+      for (const activity of role.activities) {
+        activity.skills = Array.isArray(activity.skills) ? activity.skills : String(activity.skills ?? "").split(",").map((skill) => skillSlug(skill)).filter(Boolean);
+        activity.dc = Math.max(0, Number(activity.dc) || levelBasedDC(encounter.level));
+        activity.allowLore = !!activity.allowLore;
+      }
+    }
+  }
   encounter.chaseType = ["chase-down", "run-away", "beat-clock", "competitive", "custom"].includes(encounter.chaseType) ? encounter.chaseType : "chase-down";
   encounter.currentRound = Math.max(1, Number(encounter.currentRound) || 1);
   encounter.subjectStartPosition = Math.max(0, Math.trunc(Number(encounter.subjectStartPosition ?? encounter.opponentPosition ?? 1) || 0));
@@ -343,7 +514,7 @@ function normalizeEncounterCollections(encounter) {
   encounter.npcs = indexedArray(encounter.npcs);
   // Preserve the legacy single-NPC fallback, but let new multi-NPC drafts begin
   // empty so their first target must be deliberately added or dropped.
-  if (!encounter.npcs.length && encounter.encounterType !== "multiple") {
+  if (!encounter.npcs.length && encounter.encounterType !== "multiple" && encounter.subsystemType !== "starship") {
     encounter.npcs = [{ id: randomID(), name: encounter.name, image: encounter.image, actorId: "" }];
   }
   encounter.npcs.forEach((npc) => {
@@ -423,7 +594,7 @@ function normalizeEncounterCollections(encounter) {
   encounter.journalId ??= "";
   encounter.endedAt ??= null;
   encounter.folderId ??= "";
-  encounter.encounterType = ["research", "chase", "skill"].includes(encounter.subsystemType) || encounter.encounterType === "multiple" ? "multiple" : "single";
+  encounter.encounterType = ["research", "chase", "skill", "starship"].includes(encounter.subsystemType) || encounter.encounterType === "multiple" ? "multiple" : "single";
   encounter.discoveries ??= {};
   for (const record of Object.values(encounter.discoveries)) {
     record.npcs ??= {};
@@ -461,6 +632,7 @@ const DEFAULT_ENCOUNTER = {
   skillWinnerActorId: "",
   skillOutcome: "",
   skillDescription: "",
+  starship: null,
   researchThresholds: [],
   researchInterval: { value: 1, unit: "hour" },
   progressClock: { enabled: false, clockId: "" },
@@ -1265,6 +1437,7 @@ class InfluenceTracker extends Application {
   }
   getData() {
     const encounter = Store.get();
+    if (encounter?.subsystemType === "starship") return starshipTrackerContext(encounter);
     const isResearch = encounter?.subsystemType === "research";
     const isChase = encounter?.subsystemType === "chase";
     const isSkill = encounter?.subsystemType === "skill";
@@ -1346,6 +1519,11 @@ class InfluenceTracker extends Application {
   activateListeners(html) {
     super.activateListeners(html);
     html.find("[data-action]").on("click", (event) => this._action(event));
+    html.find("[data-starship-skill]").on("change", (event) => {
+      const encounter = Store.get();
+      if (encounter?.subsystemType !== "starship") return;
+      setStarshipActionSelection(encounter, encounterViewSelection(encounter).actorId, event.currentTarget.dataset.activityId, event.currentTarget.value);
+    });
   }
   async _action(event) {
     const action = event.currentTarget.dataset.action;
@@ -1356,6 +1534,22 @@ class InfluenceTracker extends Application {
       return new EncounterEditor(encounter).render({ force: true });
     }
     if (!encounter) return;
+    if (encounter.subsystemType === "starship") {
+      if (action === "claim-starship-role") {
+        const actorId = encounterViewSelection(encounter).actorId;
+        return requestStarshipRole(encounter, actorId, event.currentTarget.dataset.roleId);
+      }
+      if (action === "select-starship-action") {
+        const actorId = encounterViewSelection(encounter).actorId;
+        return setStarshipActionSelection(encounter, actorId, event.currentTarget.dataset.activityId);
+      }
+      if (action === "take-starship-action") {
+        return requestStarshipCheck(encounter, encounterViewSelection(encounter).actorId);
+      }
+      if (action === "start-starship-round") return startStarshipRound(encounter.id);
+      if (action === "next-starship-round") return nextStarshipRound(encounter.id);
+      if (action === "starship-adjust") return adjustStarshipValue(encounter.id, event.currentTarget.dataset.path, Number(event.currentTarget.dataset.delta));
+    }
     if (action === "select-participant") {
       const actorId = event.currentTarget.dataset.actorId;
       const actor = game.actors.get(actorId);
@@ -1921,7 +2115,8 @@ async function openCreateEncounterDialog(event, folderId = "") {
       { value: "multiple", label: "Influence — Multiple NPCs" },
       { value: "research", label: "Research" },
       { value: "chase", label: "Chase" },
-      { value: "skill", label: "Skill Encounter" }
+      { value: "skill", label: "Skill Encounter" },
+      ...(game.system.id === "sf2e" ? [{ value: "starship", label: "Cinematic Starship" }] : [])
     ],
     typeHint: ""
   });
@@ -1940,9 +2135,9 @@ async function openCreateEncounterDialog(event, folderId = "") {
         const data = new foundry.applications.ux.FormDataExtended(button.form).object;
         const encounter = deepClone(DEFAULT_ENCOUNTER);
         encounter.id = randomID();
-        encounter.subsystemType = ["research", "chase", "skill"].includes(data.type) ? data.type : "influence";
-        encounter.name = data.name?.trim() || (encounter.subsystemType === "research" ? "New Research Encounter" : encounter.subsystemType === "chase" ? "New Chase" : encounter.subsystemType === "skill" ? "New Skill Encounter" : "New Influence Encounter");
-        encounter.encounterType = ["multiple", "research", "chase", "skill"].includes(data.type) ? "multiple" : "single";
+        encounter.subsystemType = ["research", "chase", "skill", "starship"].includes(data.type) ? data.type : "influence";
+        encounter.name = data.name?.trim() || (encounter.subsystemType === "research" ? "New Research Encounter" : encounter.subsystemType === "chase" ? "New Chase" : encounter.subsystemType === "skill" ? "New Skill Encounter" : encounter.subsystemType === "starship" ? "New Cinematic Starship Encounter" : "New Influence Encounter");
+        encounter.encounterType = ["multiple", "research", "chase", "skill", "starship"].includes(data.type) ? "multiple" : "single";
         if (encounter.subsystemType === "research") {
           encounter.researchThresholds = [
             [2, "First Discovery"],
@@ -1963,6 +2158,15 @@ async function openCreateEncounterDialog(event, folderId = "") {
           encounter.influence = [];
           encounter.image = "icons/svg/d20-black.svg";
           encounter.roundLimit = 3;
+        }
+        if (encounter.subsystemType === "starship") {
+          encounter.npcs = [];
+          encounter.discovery = [];
+          encounter.influence = [];
+          encounter.image = "icons/svg/wing.svg";
+          encounter.roundLimit = 0;
+          encounter.dcVisibility = "relative";
+          encounter.starship = defaultStarshipData();
         }
         encounter.folderId = data.folder || "";
         normalizeEncounterCollections(encounter);
@@ -2379,7 +2583,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this._dirty = false;
     this._forceClose = false;
   }
-  get title() { return `Encounter: ${this.encounter?.name || (this.encounter?.subsystemType === "research" ? "New Research Encounter" : this.encounter?.subsystemType === "chase" ? "New Chase" : this.encounter?.subsystemType === "skill" ? "New Skill Encounter" : "New Influence Encounter")}`; }
+  get title() { return `Encounter: ${this.encounter?.name || (this.encounter?.subsystemType === "research" ? "New Research Encounter" : this.encounter?.subsystemType === "chase" ? "New Chase" : this.encounter?.subsystemType === "skill" ? "New Skill Encounter" : this.encounter?.subsystemType === "starship" ? "New Cinematic Starship Encounter" : "New Influence Encounter")}`; }
   static DEFAULT_OPTIONS = {
     id: "influence-encounter-editor",
     tag: "form",
@@ -2398,7 +2602,8 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
         { id: "basics", label: "Basics", icon: "fa-solid fa-image" },
         { id: "skills", label: "Skills", icon: "fa-solid fa-list-check" },
         { id: "traits", label: "Weakness & Strength", icon: "fa-solid fa-scale-balanced" },
-        { id: "results", label: "Results & Boons", icon: "fa-solid fa-trophy" }
+        { id: "results", label: "Results & Boons", icon: "fa-solid fa-trophy" },
+        { id: "starship", label: "Starship", icon: "fa-solid fa-shuttle-space" }
       ],
       initial: "basics"
     }
@@ -2408,6 +2613,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const isResearch = this.encounter.subsystemType === "research";
     const isChase = this.encounter.subsystemType === "chase";
     const isSkill = this.encounter.subsystemType === "skill";
+    const isStarship = this.encounter.subsystemType === "starship";
     const selected = new Set(Array.isArray(this.encounter.participantIds)
       ? this.encounter.participantIds
       : defaultPartyCharacters().map((actor) => actor.id));
@@ -2415,6 +2621,11 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       id: actor.id, name: actor.name, nickname: this.encounter.participantNicknames?.[actor.id] ?? "",
       image: participantPortrait(actor), selected: selected.has(actor.id)
     }));
+    const shipsFolders = game.folders.filter((folder) => folder.type === "Actor" && folder.name.trim().toLowerCase() === "ships");
+    const starshipActors = game.actors
+      .filter((actor) => shipsFolders.some((folder) => actor.folder?.id === folder.id))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((actor) => ({ id: actor.id, name: actor.name, image: participantPortrait(actor) }));
     const encounterView = deepClone(this.encounter);
     if (isResearch) encounterView.npcs.forEach((source) => {
       source.researchParticipantRows = characterActors.filter((actor) => actor.selected).map((actor) => {
@@ -2425,6 +2636,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const tabs = this._prepareTabs("primary");
     if (isResearch) {
       delete tabs.traits;
+      delete tabs.starship;
       tabs.results.label = "Discoveries";
       tabs.results.icon = "fa-solid fa-lightbulb";
     } else if (isChase || isSkill) {
@@ -2432,6 +2644,14 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       tabs.traits.icon = "fa-solid fa-sliders";
       delete tabs.results;
       tabs.skills.label = isChase ? "Overcome Checks" : "Skill Checks";
+      delete tabs.starship;
+    } else if (isStarship) {
+      delete tabs.skills;
+      delete tabs.traits;
+      delete tabs.results;
+      tabs.starship.label = "Ships, Roles & Activities";
+    } else {
+      delete tabs.starship;
     }
     const chasePositionOptions = Object.fromEntries(this.encounter.npcs.map((npc, index) => [index, `${index + 1} — ${targetDisplayName(npc)}`]));
     return {
@@ -2440,13 +2660,16 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       isResearch,
       isChase,
       isSkill,
+      isStarship,
       individualSkillScoring: isSkill && this.encounter.skillScoringMode === "individual",
       goalBasedSkillEncounter: isSkill && this.encounter.skillVictoryMode === "goal",
       isChallenge: isChase || isSkill,
       progressClockAvailable: !!progressClockDatabase(),
       progressClockSupported: !isSkill || (this.encounter.skillScoringMode === "shared" && this.encounter.skillVictoryMode === "goal"),
       characterActors,
-      skillChoices: [...PF2E_SKILLS, ...((isChase || isSkill) ? PF2E_SAVES : []), ...PF2E_LORE_SKILLS, ...Object.keys(LORE_CATEGORIES)],
+      starshipActors,
+      starshipActorChoices: { "": shipsFolders.length ? "Choose an Actor from Ships…" : "No Actor folder named Ships found", ...Object.fromEntries(starshipActors.map((actor) => [actor.id, actor.name])) },
+      skillChoices: [...PF2E_SKILLS, ...(game.system.id === "sf2e" ? SF2E_SKILLS : []), ...((isChase || isSkill) ? PF2E_SAVES : []), ...PF2E_LORE_SKILLS, ...Object.keys(LORE_CATEGORIES)],
       tabs,
       modifierTypes: { circumstance: "Circumstance", status: "Status", item: "Item", untyped: "Untyped" },
       traitModes: { roll: "Roll modifier", dc: "DC adjustment", narrative: "Narrative only" },
@@ -2484,6 +2707,24 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this.element.querySelectorAll('[name$=".nickname"]').forEach((input) => input.addEventListener("input", () => {
       const index = Number(input.name.match(/^npcs\.(\d+)\.nickname$/)?.[1]);
       if (Number.isInteger(index) && this.encounter.npcs[index]) this.encounter.npcs[index].nickname = input.value.trim();
+    }));
+    this.element.querySelectorAll("[data-starship-ship-picker]").forEach((picker) => picker.addEventListener("change", () => {
+      const shipKey = picker.dataset.starshipShipPicker;
+      const ship = this.encounter.starship?.ships?.[shipKey];
+      const actor = game.actors.get(picker.value);
+      if (!ship || !actor) return;
+      const otherShip = Object.entries(this.encounter.starship.ships).find(([key, entry]) => key !== shipKey && entry.actorId === actor.id);
+      if (otherShip) {
+        picker.value = ship.actorId || "";
+        return ui.notifications.warn(`${actor.name} is already linked to the other combatant.`);
+      }
+      this._capture();
+      ship.actorId = actor.id;
+      ship.name = actor.name;
+      ship.image = participantPortrait(actor);
+      this._dirty = true;
+      ui.notifications.info(`Linked ${actor.name} as this combatant. Encounter stats remain unchanged.`);
+      this.render({ force: true });
     }));
     this.element.querySelector('[name="name"]')?.addEventListener("input", (event) => {
       const name = event.currentTarget.value.trim() || "New Influence Encounter";
@@ -2569,6 +2810,18 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       this.encounter.npcs = obstacles;
       this._dirty = true;
       ui.notifications.info(`Linked the chase subject to ${actor.name}.`);
+      return this.render({ force: true });
+    }
+    if (dropType === "starship-ship") {
+      const ship = this.encounter.starship?.ships?.[dropIndex];
+      if (!ship || !actor) return ui.notifications.warn("Drop a starship Actor from the sidebar or a Token from the canvas.");
+      const otherShip = Object.entries(this.encounter.starship.ships).find(([key, entry]) => key !== dropIndex && entry.actorId === actor.id);
+      if (otherShip) return ui.notifications.warn(`${actor.name} is already linked to the other combatant.`);
+      ship.actorId = actor.id;
+      ship.name = actor.name;
+      ship.image = participantPortrait(actor);
+      this._dirty = true;
+      ui.notifications.info(`Linked ${actor.name} as this combatant. Encounter stats remain unchanged.`);
       return this.render({ force: true });
     }
     if (dropType === "link-target") {
@@ -2795,7 +3048,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       }
       this.encounter.id ||= randomID();
       this.encounter.phases = Number(this.encounter.phases) || 4;
-      if (!this.encounter.npcs.length) {
+      if (!this.encounter.npcs.length && this.encounter.subsystemType !== "starship") {
         ui.notifications.warn(`Add at least one ${this.encounter.subsystemType === "research" ? "Research Source" : this.encounter.subsystemType === "chase" ? "Obstacle" : this.encounter.subsystemType === "skill" ? "Challenge" : "Influence Target"} before saving this encounter.`);
         return false;
       }
@@ -2874,6 +3127,119 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this._forceClose = true;
     return super.close(options);
   }
+}
+
+async function requestStarshipRole(encounter, actorId, roleId) {
+  const actor = game.actors.get(actorId);
+  if (!actor) return ui.notifications.warn("Choose a participating PC first.");
+  if (!game.user.isGM && !canUserControlActor(actor)) return ui.notifications.warn(`You must be an Owner of ${actor.name} to claim a crew role.`);
+  const payload = { action: "starship-role", encounterId: encounter.id, actorId, roleId, userId: game.user.id };
+  if (game.user.isGM) return assignStarshipRole(payload);
+  game.socket.emit(SOCKET, payload);
+}
+
+async function assignStarshipRole(payload) {
+  if (!game.user.isGM || game.users.activeGM?.id !== game.user.id) return;
+  const encounter = Store.get(payload.encounterId);
+  const actor = game.actors.get(payload.actorId);
+  const role = starshipRole(encounter, payload.roleId);
+  if (!encounter || encounter.subsystemType !== "starship" || encounter.status !== "active" || encounter.starship.stage !== "role-selection" || !actor || !role) return;
+  const user = game.users.get(payload.userId);
+  if (!user?.isGM && !canUserControlActor(actor, user)) return;
+  if (!encounterParticipants(encounter).some((participant) => participant.id === actor.id)) return;
+  const occupied = Object.entries(encounter.starship.roleSelections).filter(([assignedActorId, assignedRoleId]) => assignedActorId !== actor.id && assignedRoleId === role.id).length;
+  if (occupied >= role.capacity) {
+    game.socket.emit(SOCKET, { action: "check-request-status", userId: payload.userId, message: `${role.label} has no open seats.` });
+    return;
+  }
+  snapshot(encounter, `${participantDisplayName(encounter, actor)} claims ${role.label}`);
+  encounter.starship.roleSelections[actor.id] = role.id;
+  encounter.starship.actionSelections[actor.id] = {};
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+}
+
+async function setStarshipActionSelection(encounter, actorId, activityId, skillSlug = "") {
+  const actor = game.actors.get(actorId);
+  const roleId = encounter?.starship?.roleSelections?.[actorId];
+  const activity = starshipActivityFor(encounter, roleId, activityId);
+  if (!actor || !activity || encounter?.starship?.stage !== "actions") return;
+  if (!game.user.isGM && !canUserControlActor(actor)) return;
+  const selectedSkill = skillSlug || starshipActivityChoices(actor, activity)[0]?.slug || "";
+  const payload = { action: "starship-action-selection", encounterId: encounter.id, actorId, activityId, skillSlug: selectedSkill, userId: game.user.id };
+  if (game.user.isGM) return saveStarshipActionSelection(payload);
+  game.socket.emit(SOCKET, payload);
+}
+
+async function saveStarshipActionSelection(payload) {
+  if (!game.user.isGM || game.users.activeGM?.id !== game.user.id) return;
+  const encounter = Store.get(payload.encounterId);
+  const actor = game.actors.get(payload.actorId);
+  const roleId = encounter?.starship?.roleSelections?.[payload.actorId];
+  const activity = starshipActivityFor(encounter, roleId, payload.activityId);
+  const user = game.users.get(payload.userId);
+  if (!encounter || encounter.subsystemType !== "starship" || encounter.starship.stage !== "actions" || !actor || !activity || (!user?.isGM && !canUserControlActor(actor, user))) return;
+  const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === payload.skillSlug);
+  if (!skill) return;
+  encounter.starship.actionSelections[actor.id] = { activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label };
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+}
+
+async function startStarshipRound(encounterId) {
+  if (!game.user.isGM) return;
+  const encounter = Store.get(encounterId);
+  if (!encounter || encounter.subsystemType !== "starship" || encounter.status !== "active" || encounter.starship.stage !== "role-selection") return;
+  snapshot(encounter, `Start starship round ${encounter.currentRound}`);
+  encounter.starship.stage = "actions";
+  encounter.starship.actionSelections = {};
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+}
+
+async function nextStarshipRound(encounterId) {
+  if (!game.user.isGM) return;
+  const encounter = Store.get(encounterId);
+  if (!encounter || encounter.subsystemType !== "starship" || encounter.status !== "active" || encounter.starship.stage !== "actions") return;
+  if (encounter.pendingChecks?.length) return ui.notifications.warn("Resolve or cancel pending crew actions before beginning the next round.");
+  snapshot(encounter, `Begin starship round ${Number(encounter.currentRound) + 1}`);
+  encounter.currentRound += 1;
+  encounter.actorsActed = {};
+  encounter.starship.roleSelections = {};
+  encounter.starship.actionSelections = {};
+  encounter.starship.stage = "role-selection";
+  for (const ship of Object.values(encounter.starship.ships)) ship.shields = ship.shieldRefresh;
+  await Store.save(encounter);
+  await ChatMessage.create({ content: `<div class="influence-chat influence-result"><strong>Starship Round ${encounter.currentRound}</strong><p>Crew roles are open for selection. Shields refresh to their configured values.</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+  game.socket.emit(SOCKET, { action: "refresh" });
+}
+
+async function adjustStarshipValue(encounterId, path, delta) {
+  if (!game.user.isGM || !Number.isFinite(delta)) return;
+  const encounter = Store.get(encounterId);
+  if (!encounter || encounter.subsystemType !== "starship") return;
+  snapshot(encounter, `Adjust starship ${path}`);
+  if (path === "countdown") encounter.starship.countdown.value = Math.max(0, encounter.starship.countdown.value + delta);
+  else {
+    const [shipId, key] = String(path).split(".");
+    const ship = encounter.starship.ships[shipId];
+    if (!ship || !["hp", "shields"].includes(key)) return;
+    ship[key] = Math.max(0, Math.min(key === "hp" ? ship.maxHp : Number.POSITIVE_INFINITY, Number(ship[key]) + delta));
+  }
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+}
+
+async function requestStarshipCheck(encounter, actorId) {
+  const actor = game.actors.get(actorId);
+  const roleId = encounter?.starship?.roleSelections?.[actorId];
+  const selection = encounter?.starship?.actionSelections?.[actorId];
+  const activity = starshipActivityFor(encounter, roleId, selection?.activityId);
+  const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === selection?.skillSlug);
+  if (!actor || !activity || !skill) return ui.notifications.warn("Choose a role, activity, and trained eligible statistic first.");
+  if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this round.`);
+  const payload = { action: "check-request", encounterId: encounter.id, npcId: "starship-heart", requesterId: game.user.id, actorId: actor.id, type: "starship", roleId, activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label };
+  if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
 }
 
 async function requestCheck(encounter, type, selectedActorId = null, selectedNpcId = null) {
@@ -2971,7 +3337,14 @@ async function enqueueCheckRequest(payload) {
   const encounter = Store.get(payload.encounterId);
   const actor = game.actors.get(payload.actorId);
   const npc = encounter?.npcs?.find((entry) => entry.id === payload.npcId);
-  if (!encounter || encounter.status !== "active" || !actor || !npc) return ui.notifications.warn("That check request is no longer valid.");
+  const starship = encounter?.subsystemType === "starship" && payload.type === "starship";
+  if (!encounter || encounter.status !== "active" || !actor || (!npc && !starship)) return ui.notifications.warn("That check request is no longer valid.");
+  if (starship) {
+    const roleId = encounter.starship.roleSelections[actor.id];
+    const activity = starshipActivityFor(encounter, roleId, payload.activityId);
+    const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === payload.skillSlug);
+    if (encounter.starship.stage !== "actions" || roleId !== payload.roleId || !activity || !skill || encounter.actorsActed?.[actor.id]) return ui.notifications.warn("That crew action is no longer available.");
+  }
   if (encounter.skillOutcome || encounter.chaseOutcome) return ui.notifications.warn("That encounter has already concluded.");
   if (encounter.pendingChecks.some((entry) => entry.actorId === payload.actorId)) {
     game.socket.emit(SOCKET, { action: "check-request-status", userId: payload.requesterId, message: `${participantDisplayName(encounter, actor)} already has a check waiting for the GM.` });
@@ -2980,11 +3353,14 @@ async function enqueueCheckRequest(payload) {
   const request = { ...payload, id: payload.id || randomID(), submittedAt: Date.now() };
   encounter.pendingChecks.push(request);
   await Store.save(encounter);
-  const skillList = request.type === "discovery" ? npc.discovery : npc.influence;
-  const skill = skillList.find((entry) => entry.id === request.skillId || entry.slug === request.skillSlug);
+  const skillList = request.type === "discovery" ? npc?.discovery : npc?.influence;
+  const skill = starship ? starshipActivityChoices(actor, starshipActivityFor(encounter, request.roleId, request.activityId)).find((entry) => entry.slug === request.skillSlug) : skillList.find((entry) => entry.id === request.skillId || entry.slug === request.skillSlug);
   const actorName = participantDisplayName(encounter, actor);
-  const npcName = targetDisplayName(npc);
-  await ChatMessage.create({ content: `<div class="influence-chat influence-check-request"><strong>Check Requested</strong><p>${esc(actorName)} requested a check against ${esc(npcName)} using ${esc(skill?.label ?? request.skillLabel ?? "an unknown skill")}.</p></div>` });
+  const npcName = starship ? encounter.starship.ships.heart.name : targetDisplayName(npc);
+  const requestLine = starship
+    ? `${esc(actorName)} requested ${esc(starshipActivityFor(encounter, request.roleId, request.activityId)?.label ?? "a crew action")} using ${esc(skill?.label ?? request.skillLabel ?? "an unknown statistic")}.`
+    : `${esc(actorName)} requested a check against ${esc(npcName)} using ${esc(skill?.label ?? request.skillLabel ?? "an unknown skill")}.`;
+  await ChatMessage.create({ content: `<div class="influence-chat influence-check-request"><strong>Check Requested</strong><p>${requestLine}</p></div>` });
   game.socket.emit(SOCKET, { action: "check-request-status", userId: request.requesterId, message: `${actorName}'s check request is queued for the GM.` });
   game.socket.emit(SOCKET, { action: "refresh" });
   tracker?.render(false);
@@ -2998,6 +3374,7 @@ async function adjudicate(request) {
   const actor = game.actors.get(request.actorId);
   if (!encounter || !encounter.pendingChecks.some((entry) => entry.id === request.id)) return ui.notifications.error("The requested check is no longer available.");
   if (!actor) return cancelPendingCheck(encounter.id, request.id, "The acting PC is no longer available.");
+  if (request.type === "starship" && encounter.subsystemType === "starship") return adjudicateStarship(request, encounter, actor);
   const npc = encounter.npcs.find((entry) => entry.id === request.npcId);
   if (!npc) return cancelPendingCheck(encounter.id, request.id, "The requested target is no longer available.");
   const actorName = participantDisplayName(encounter, actor);
@@ -3071,6 +3448,96 @@ async function adjudicate(request) {
       cancel: { label: "Return to Queue" }
     }, default: "roll", close: () => { adjudicationOpen = false; }
   }, { width: 520 }).render(true);
+}
+
+async function adjudicateStarship(request, encounter, actor) {
+  if (encounter.starship.stage !== "actions" || encounter.actorsActed?.[actor.id]) return cancelPendingCheck(encounter.id, request.id, "That crew action is no longer available.");
+  const role = starshipRole(encounter, request.roleId);
+  const activity = starshipActivityFor(encounter, request.roleId, request.activityId);
+  const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === request.skillSlug);
+  if (!role || !activity || !skill) return cancelPendingCheck(encounter.id, request.id, "That crew action or statistic is no longer available.");
+  const actorName = participantDisplayName(encounter, actor);
+  const mods = [
+    ...(encounter.starship.modifiers ?? []),
+    ...(encounter.activeEffects ?? []).filter((effect) => !effect.targetNpcId && effect.mode !== "narrative")
+  ];
+  const rows = mods.map((modifier) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${esc(modifier.id)}"> <strong>${esc(modifier.label)}</strong> ${signed(Number(modifier.value))}<small>${esc(modifier.description ?? "")}</small></label>`).join("");
+  const customMods = [];
+  adjudicationOpen = true;
+  new Dialog({
+    title: `Adjudicate ${role.label}: ${activity.label}`,
+    content: `<form class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> uses <strong>${esc(skill.label)}</strong> for <strong>${esc(activity.label)}</strong> against DC ${activity.dc}.</p>${rows}<hr><h4>Additional modifier</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"></div></form>`,
+    render: (html) => {
+      const renderCustomMods = () => html.find(".custom-modifiers").html(customMods.map((mod) => `<div class="custom-modifier"><span><strong>${esc(mod.label)}</strong> ${signed(mod.value)} (${esc(mod.type)})</span><button type="button" data-remove-custom="${mod.id}"><i class="fas fa-times"></i></button></div>`).join(""));
+      html.find('[data-action="add-custom"]').on("click", () => {
+        const value = Number(html.find('[name="customValue"]').val());
+        if (!Number.isFinite(value) || value === 0) return ui.notifications.warn("Enter a non-zero modifier before adding it.");
+        customMods.push({ id: randomID(), label: html.find('[name="customLabel"]').val()?.trim() || "Situational Modifier", value, type: html.find('[name="customType"]').val(), mode: "roll" });
+        html.find('[name="customLabel"]').val("");
+        html.find('[name="customValue"]').val(0);
+        renderCustomMods();
+      });
+      html.find(".custom-modifiers").on("click", "[data-remove-custom]", (event) => {
+        const index = customMods.findIndex((mod) => mod.id === event.currentTarget.dataset.removeCustom);
+        if (index >= 0) customMods.splice(index, 1);
+        renderCustomMods();
+      });
+    },
+    buttons: {
+      roll: { icon: '<i class="fas fa-dice-d20"></i>', label: "Confirm and Roll", callback: async (html) => {
+        const selectedIds = html.find('[name="mod"]:checked').map((_, element) => element.value).get();
+        const selected = [...mods.filter((modifier) => selectedIds.includes(modifier.id)), ...customMods];
+        await executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, Number(html.find('[name="dcAdjust"]').val()) || 0);
+      } },
+      cancel: { label: "Return to Queue" }
+    }, default: "roll", close: () => { adjudicationOpen = false; }
+  }, { width: 560 }).render(true);
+}
+
+async function executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, dcAdjust) {
+  const statistic = skillStatistic(actor, skill.slug, skill.label);
+  if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
+  const rollModifiers = selected.map((modifier) => new game.pf2e.Modifier({ slug: `starship-${String(modifier.id).slugify()}`, label: modifier.label, modifier: Number(modifier.value), type: modifier.type || "untyped" }));
+  const effectiveDC = Number(activity.dc) + dcAdjust;
+  const roll = await statistic.roll({
+    dc: { value: effectiveDC, visible: false, label: `${encounter.name} — ${activity.label}` },
+    modifiers: rollModifiers,
+    extraRollOptions: [`influence:starship:${activity.id}`, `influence:encounter:${encounter.id}`],
+    label: `${role.label}: ${activity.label}`,
+    messageMode: "public",
+    createMessage: true
+  });
+  if (!roll) return;
+  const degree = Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
+  const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
+  const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
+  const actorName = participantDisplayName(encounter, actor);
+  snapshot(encounter, `${actorName}: ${activity.label}`);
+  const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: "starship-heart", npcName: encounter.starship.ships.heart.name, type: "starship", skillLabel: skill.label, outcome, phase: encounter.currentRound, timestamp: Date.now(), detailLabel: role.label, details: [activity.label] };
+  encounter.checkLog.push(logEntry);
+  encounter.actorsActed[actor.id] = true;
+  encounter.pendingChecks = encounter.pendingChecks.filter((entry) => entry.id !== request.id);
+  let damageReport = "";
+  if (activity.damage && degree >= 2) {
+    const formula = degree === 3 ? `(${activity.damage}) * 2` : activity.damage;
+    const damageRoll = await new Roll(formula).evaluate({ async: true });
+    const target = encounter.starship.ships[activity.target ?? "heart"];
+    const rawDamage = Number(damageRoll.total) || 0;
+    const weakness = activity.damageType === "fire" ? Math.max(0, Number(target.fireWeakness) || 0) : 0;
+    const totalDamage = rawDamage + weakness;
+    const shieldDamage = activity.ignoresShields ? 0 : Math.min(Number(target.shields) || 0, totalDamage);
+    const hullDamage = Math.max(0, totalDamage - shieldDamage);
+    if (!activity.ignoresShields) target.shields = Math.max(0, Number(target.shields) - shieldDamage);
+    target.hp = Math.max(0, Number(target.hp) - hullDamage);
+    damageReport = `<p><strong>${esc(activity.label)}</strong> hits ${esc(target.name)} for ${rawDamage} ${esc(activity.damageType ?? "")}${weakness ? ` + ${weakness} fire weakness` : ""}. Shields absorb ${shieldDamage}; hull takes ${hullDamage} damage.</p>`;
+    logEntry.details.push(`${rawDamage} ${activity.damageType ?? "damage"}; shields absorbed ${shieldDamage}; hull damage ${hullDamage}.`);
+  } else if (activity.damage) {
+    damageReport = `<p><strong>${esc(activity.label)}</strong> misses ${esc(encounter.starship.ships[activity.target ?? "heart"].name)}.</p>`;
+  }
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+  await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(role.label)}</strong><p>${esc(actorName)} used ${esc(skill.label)} for ${esc(activity.label)}: <strong>${outcome}</strong>.</p>${damageReport}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+  tracker?.render(false);
 }
 
 async function executeCheck(encounter, request, actor, skill, selected, dcAdjust) {
@@ -3383,6 +3850,8 @@ Hooks.once("ready", async () => {
   tracker = new InfluenceTracker();
   game.socket.on(SOCKET, (payload) => {
     if (payload.action === "check-request" && game.user.isGM && game.users.activeGM?.id === game.user.id) receiveCheckRequest(payload);
+    if (payload.action === "starship-role" && game.user.isGM && game.users.activeGM?.id === game.user.id) assignStarshipRole(payload);
+    if (payload.action === "starship-action-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) saveStarshipActionSelection(payload);
     if (payload.action === "check-request-status" && payload.userId === game.user.id) ui.notifications.info(payload.message);
     if (payload.action === "discovery-offer" && payload.userId === game.user.id) collectDiscoveryChoices(payload.choices, payload.actorId).then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
     if (payload.action === "discovery-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveDiscovery(payload.encounterId, payload.userId, payload.selections, payload.logEntryId);

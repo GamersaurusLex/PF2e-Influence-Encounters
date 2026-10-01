@@ -25,6 +25,11 @@
       </fieldset>
       <fieldset><legend>Encounter Configuration</legend>
         <div class="form-group"><label>Level</label><div class="form-fields"><input type="number" min="0" max="25" name="level" value="{{encounter.level}}"><button type="button" data-action="dcReference" title="Show PF2e DCs for this level"><i class="fa-solid fa-table-cells"></i> DC Reference</button></div></div>
+        {{#if isStarship}}
+        <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><span class="units">Open-ended encounter</span></div></div>
+        <div class="form-group"><label>Countdown</label><div class="form-fields"><input type="number" min="0" name="starship.countdown.value" value="{{encounter.starship.countdown.value}}"><label>Limit</label><input type="number" min="1" name="starship.countdown.limit" value="{{encounter.starship.countdown.limit}}"></div></div>
+        <p class="hint">Players see only the activity difficulty word. The GM sees the exact DC during adjudication.</p>
+        {{else}}
         {{#if isResearch}}
         <div class="form-group"><label>Research Interval</label><div class="form-fields"><input type="number" min="1" name="researchInterval.value" value="{{encounter.researchInterval.value}}"><select name="researchInterval.unit">{{selectOptions intervalUnits selected=encounter.researchInterval.unit}}</select></div></div>
         <div class="form-group"><label>Current Shared RP</label><div class="form-fields"><input type="number" min="0" name="researchPoints" value="{{encounter.researchPoints}}"></div></div>
@@ -65,10 +70,13 @@
         <div class="form-group"><label>Phases</label><div class="form-fields"><input type="number" min="1" name="phases" value="{{encounter.phases}}"></div></div>
         <div class="form-group"><label>Phase Flow</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="promptAdvanceWhenAllActed" {{checked encounter.promptAdvanceWhenAllActed}}> Prompt the GM to advance after every participating PC acts</label></div></div>
         {{/if}}{{/if}}{{/if}}
-        <div class="form-group"><label>Global Progress Clocks</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="progressClock.enabled" {{checked encounter.progressClock.enabled}} {{#unless progressClockAvailable}}disabled{{/unless}} {{#unless progressClockSupported}}disabled{{/unless}}> {{#if isResearch}}Keep a persistent public RP tracker{{else}}{{#if isSkill}}Keep a persistent public SP tracker{{else}}Keep a persistent public IP tracker for each target{{/if}}{{/if}}</label></div></div>
-        {{#unless progressClockAvailable}}<p class="hint">Enable the optional Global Progress Clocks module to use this feature. Encounters work normally without it.</p>{{/unless}}
-        {{#unless progressClockSupported}}<p class="hint">Skill progress clocks require a shared point pool and a point-goal victory condition.</p>{{/unless}}
-        <div class="form-group"><label>Show Exact Points to Players</label><div class="form-fields"><input type="checkbox" name="publicPoints" {{checked encounter.publicPoints}}></div></div>
+        {{/if}}
+        {{#unless isStarship}}
+          <div class="form-group"><label>Global Progress Clocks</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="progressClock.enabled" {{checked encounter.progressClock.enabled}} {{#unless progressClockAvailable}}disabled{{/unless}} {{#unless progressClockSupported}}disabled{{/unless}}> {{#if isResearch}}Keep a persistent public RP tracker{{else}}{{#if isSkill}}Keep a persistent public SP tracker{{else}}Keep a persistent public IP tracker for each target{{/if}}{{/if}}</label></div></div>
+          {{#unless progressClockAvailable}}<p class="hint">Enable the optional Global Progress Clocks module to use this feature. Encounters work normally without it.</p>{{/unless}}
+          {{#unless progressClockSupported}}<p class="hint">Skill progress clocks require a shared point pool and a point-goal victory condition.</p>{{/unless}}
+          <div class="form-group"><label>Show Exact Points to Players</label><div class="form-fields"><input type="checkbox" name="publicPoints" {{checked encounter.publicPoints}}></div></div>
+        {{/unless}}
       </fieldset>
       {{#if isChase}}<section class="source-parser"><h3>Import Published Chase Text</h3><p class="hint">Paste one or more obstacle blocks containing an OBSTACLE heading, Chase Points, and Overcome DCs. Parsing replaces the current obstacle list; review the generated fields before saving.</p><textarea data-chase-parser-source placeholder="THROWN POWDER OBSTACLE 5&#10;Chase Points 5; Overcome DC 20 Acrobatics or Athletics...&#10;Obstacle description"></textarea><button type="button" data-action="parseChase"><i class="fa-solid fa-wand-magic-sparkles"></i> Parse Chase Obstacles</button></section>{{/if}}
       <fieldset><legend>Encounter Participants</legend>
@@ -76,6 +84,7 @@
         <div class="actor-drop-zone" data-actor-drop="participant"><i class="fa-solid fa-user-plus"></i><strong>Drop participating PCs here</strong><span>Character Actors or Tokens</span></div>
         {{#if characterActors.length}}<div class="participant-picker">{{#each characterActors}}<div class="participant-choice"><input type="checkbox" name="partyParticipant" value="{{id}}" {{checked selected}}><img src="{{image}}" alt=""><div><strong>{{name}}</strong><input name="participantNicknames.{{id}}" value="{{nickname}}" placeholder="Optional nickname" aria-label="Nickname for {{name}}"></div></div>{{/each}}</div>{{else}}<p class="hint">No character actors are available in this world.</p>{{/if}}
       </fieldset>
+      {{#unless isStarship}}
       <h2>{{#if isResearch}}Research Sources{{else}}{{#if isChase}}Ordered Obstacles{{else}}{{#if isSkill}}Skill Challenges{{else}}Influence Targets{{/if}}{{/if}}{{/if}}</h2>
       <p class="hint">{{#if isResearch}}Add each book, witness, location, or other source the PCs can investigate. Drag Actors, Items, Journals, or Journal pages to reuse their existing names and images.{{else}}{{#if isSkill}}Add one or more situations that offer different checks. Challenges remain available throughout the encounter; earned SP goes to the shared pool or acting PC according to the scoring mode.{{else}}Drag Actors from the sidebar or Tokens from the canvas to populate names and images. Background and Personality are GM-only; Appearance is shown to players.{{/if}}{{/if}}</p>
       {{#unless isChase}}{{#unless isSkill}}<div class="actor-drop-zone" data-actor-drop="npc"><i class="fa-solid {{#if isResearch}}fa-book-open{{else}}fa-user-plus{{/if}}"></i><strong>Drop {{#if isResearch}}research sources{{else}}influence targets{{/if}} here</strong><span>{{#if isResearch}}Actor, Item, Journal, or Journal Page{{else}}Any Actor or Token{{/if}}</span></div>{{/unless}}{{/unless}}
@@ -117,8 +126,46 @@
       </fieldset>
       {{/each}}
       <button type="button" data-action="add" data-type="npc"><i class="fas fa-plus"></i> Add {{#if isResearch}}Research Source{{else}}{{#if isChase}}Obstacle{{else}}{{#if isSkill}}Challenge{{else}}Influence Target{{/if}}{{/if}}{{/if}}</button>
+      {{/unless}}
     </div>
 
+    {{#if isStarship}}
+    <div class="tab {{tabs.starship.cssClass}}" data-group="primary" data-tab="starship">
+      <fieldset><legend>Ships</legend>
+        {{#each encounter.starship.ships}}
+        <fieldset class="npc-editor-card"><legend>{{name}}</legend>
+          <input type="hidden" name="starship.ships.{{@key}}.actorId" value="{{actorId}}">
+          <div class="actor-drop-zone target-link-drop-zone" data-actor-drop="starship-ship:{{@key}}"><i class="fa-solid fa-rocket"></i><strong>{{#if actorId}}Replace linked ship Actor{{else}}Link a ship Actor{{/if}}</strong><span>Drop an Actor or Token to copy its name and portrait only</span></div>
+          <div class="form-group"><label>Actor from Ships folder</label><div class="form-fields"><select data-starship-ship-picker="{{@key}}">{{selectOptions @root.starshipActorChoices selected=actorId}}</select></div></div>
+          <div class="form-group"><label>Name</label><div class="form-fields"><input name="starship.ships.{{@key}}.name" value="{{name}}"></div></div>
+          <div class="form-group"><label>Image</label><div class="form-fields"><file-picker type="image" name="starship.ships.{{@key}}.image" value="{{image}}"></file-picker></div></div>
+          <div class="trait-grid"><label>Hull HP<input type="number" min="0" name="starship.ships.{{@key}}.hp" value="{{hp}}"></label><label>Maximum HP<input type="number" min="1" name="starship.ships.{{@key}}.maxHp" value="{{maxHp}}"></label><label>Shields<input type="number" min="0" name="starship.ships.{{@key}}.shields" value="{{shields}}"></label><label>Shield Refresh<input type="number" min="0" name="starship.ships.{{@key}}.shieldRefresh" value="{{shieldRefresh}}"></label></div>
+          <div class="trait-grid"><label>AC<input type="number" min="0" name="starship.ships.{{@key}}.ac" value="{{ac}}"></label><label>Fortitude<input type="number" name="starship.ships.{{@key}}.fortitude" value="{{fortitude}}"></label><label>Reflex<input type="number" name="starship.ships.{{@key}}.reflex" value="{{reflex}}"></label></div>
+        </fieldset>
+        {{/each}}
+      </fieldset>
+      <fieldset><legend>Crew Roles and Activities</legend>
+        <p class="hint">Every PC may claim any open role during role selection. Each activity lists its trained skills; every non-Gunner activity also offers all trained Lore skills for GM approval.</p>
+        {{#each encounter.starship.roles}}
+        <fieldset class="npc-editor-card"><legend>{{label}}</legend>
+          <input type="hidden" name="starship.roles.{{@index}}.id" value="{{id}}">
+          <div class="form-group"><label>Role</label><div class="form-fields"><input name="starship.roles.{{@index}}.label" value="{{label}}"><label>Seats</label><input type="number" min="1" name="starship.roles.{{@index}}.capacity" value="{{capacity}}"></div></div>
+          {{#each activities}}
+          <div class="starship-activity-editor"><input type="hidden" name="starship.roles.{{@../index}}.activities.{{@index}}.id" value="{{id}}"><div class="trait-grid"><label>Activity<input name="starship.roles.{{@../index}}.activities.{{@index}}.label" value="{{label}}"></label><label>DC<input type="number" min="0" name="starship.roles.{{@../index}}.activities.{{@index}}.dc" value="{{dc}}"></label><label>Skill slugs<input name="starship.roles.{{@../index}}.activities.{{@index}}.skills" value="{{skills}}" placeholder="computers,crafting"></label></div><label>Description<textarea name="starship.roles.{{@../index}}.activities.{{@index}}.description">{{description}}</textarea></label></div>
+          {{/each}}
+        </fieldset>
+        {{/each}}
+      </fieldset>
+      <fieldset><legend>GM Adjudication Modifiers</legend>
+        <p class="hint">These are offered as checkboxes whenever the GM resolves a crew action. Keep conditional effects here, then apply only the ones that actually fit the table fiction.</p>
+        {{#each encounter.starship.modifiers}}
+        <div class="trait-grid"><input type="hidden" name="starship.modifiers.{{@index}}.id" value="{{id}}"><label>Name<input name="starship.modifiers.{{@index}}.label" value="{{label}}"></label><label>Bonus / Penalty<input type="number" name="starship.modifiers.{{@index}}.value" value="{{value}}"></label><label>Type<select name="starship.modifiers.{{@index}}.type">{{selectOptions @root.modifierTypes selected=type}}</select></label><label>Description<input name="starship.modifiers.{{@index}}.description" value="{{description}}"></label></div>
+        {{/each}}
+      </fieldset>
+    </div>
+    {{/if}}
+
+    {{#unless isStarship}}
     <div class="tab {{tabs.skills.cssClass}}" data-group="primary" data-tab="skills">
       <datalist id="influence-skill-choices">{{#each skillChoices}}<option value="{{this}}"></option>{{/each}}</datalist>
       {{#each encounter.npcs}}
@@ -226,6 +273,7 @@
       {{/each}}
       {{/if}}
     </div>
+    {{/unless}}
   </section>
   <footer class="form-footer"><button type="submit"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></footer>
 </div>

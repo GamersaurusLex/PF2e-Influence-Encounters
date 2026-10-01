@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.6 — 2026-09-30
+
+- Added a Starfinder 2e cinematic starship-encounter prototype: configurable crew roles and actions, hidden difficulty descriptors, GM-adjudicated requests, a round countdown, public gunner attack results, player-safe enemy-damage states, and GM manual controls for countdown and ship damage.
+- Starship encounters now let the GM link either combatant to any Actor in the world’s `Ships` folder, or drag an Actor or Token directly onto its card. Linking copies only the Actor’s name and portrait; all encounter HP, shields, AC, and other mechanics remain independently configured.
+- Declared SF2e 1.5.1+ compatibility alongside PF2e.
+
 ## 0.7.5 — 2026-09-29
 
 - Pausing an encounter now closes its tracker window for the GM and every player client while preserving the paused encounter for later resumption.
