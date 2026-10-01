@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.7 — 2026-09-30
+
+- Removed the manifest system restriction so Foundry and Forge can make the module available in any game system. The Starship encounter prototype remains designed for SF2e; the existing Influence, Research, Chase, and Skill tools remain designed for PF2e-compatible systems.
+
 ## 0.7.6 — 2026-09-30
 
 - Added a Starfinder 2e cinematic starship-encounter prototype: configurable crew roles and actions, hidden difficulty descriptors, GM-adjudicated requests, a round countdown, public gunner attack results, player-safe enemy-damage states, and GM manual controls for countdown and ship damage.
