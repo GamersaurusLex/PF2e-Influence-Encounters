@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.8 — 2026-10-06
+
+- Research sources can now link to a dropped Actor or Token. The source preserves its configured research mechanics while adopting the linked Actor's name and portrait; a GM can unlink it later without losing the copied display data.
+
 ## 0.7.7 — 2026-09-30
 
 - Removed the manifest system restriction so Foundry and Forge can make the module available in any game system. The Starship encounter prototype remains designed for SF2e; the existing Influence, Research, Chase, and Skill tools remain designed for PF2e-compatible systems.

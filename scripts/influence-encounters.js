@@ -2827,12 +2827,14 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     if (dropType === "link-target") {
       const npc = this.encounter.npcs[Number(dropIndex)];
       if (!npc || !actor) return ui.notifications.warn("Drop an Actor from the sidebar or a Token from the canvas.");
-      if (this.encounter.npcs.some((entry) => entry !== npc && entry.actorId === actor.id)) return ui.notifications.warn(`${actor.name} is already linked to another influence target.`);
+      const research = this.encounter.subsystemType === "research";
+      if (!research && this.encounter.npcs.some((entry) => entry !== npc && entry.actorId === actor.id)) return ui.notifications.warn(`${actor.name} is already linked to another influence target.`);
       npc.actorId = actor.id;
+      if (research) npc.sourceUuid = actor.uuid;
       npc.name = actor.name;
       npc.image = participantPortrait(actor);
       this._dirty = true;
-      ui.notifications.info(`Linked this influence target to ${actor.name}. Its encounter mechanics were preserved.`);
+      ui.notifications.info(`Linked this ${research ? "research source" : "influence target"} to ${actor.name}. Its encounter mechanics were preserved.`);
       return this.render({ force: true });
     }
     if (dropType === "participant") {
