@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.9 — 2026-10-06
+
+- Added per-source, target, obstacle, and challenge Esoteric Lore controls. Mark a subject as Esoteric Lore Relevant, then optionally mark it as involving monsters, haunts, or curses.
+- Relevant subjects receive editable Esoteric Lore check entries. A PC with Diverse Lore can use the same Esoteric Lore statistic on a subject outside those subjects with a required −2 circumstance penalty; the GM sees and applies that penalty during adjudication.
+
 ## 0.7.8 — 2026-10-06
 
 - Research sources can now link to a dropped Actor or Token. The source preserves its configured research mechanics while adopting the linked Actor's name and portrait; a GM can unlink it later without losing the copied display data.

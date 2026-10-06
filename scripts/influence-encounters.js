@@ -529,6 +529,8 @@ function normalizeEncounterCollections(encounter) {
     npc.personality ??= "";
     // Research sources can set the scene without replacing their own portrait.
     npc.cinematicBackgroundImage ??= "";
+    npc.esotericLoreRelevant = !!npc.esotericLoreRelevant;
+    npc.esotericLoreMonsterHauntCurse = !!npc.esotericLoreMonsterHauntCurse;
     npc.points = Number(npc.points ?? encounter.points) || 0;
     npc.maximumPoints = Math.max(0, Number(npc.maximumPoints) || 0);
     npc.baseMaximumPoints = Math.max(0, Number(npc.baseMaximumPoints ?? npc.maximumPoints) || 0);
@@ -1366,8 +1368,31 @@ function isLoreSkill(skill) {
   return !!skill.lore || /(?:^|-)lore$/.test(String(skill.slug ?? "").toLowerCase()) || / lore$/i.test(String(skill.label ?? ""));
 }
 
-function availableSkillsForActor(actor, skills) {
-  return skills.filter((skill) => !isLoreSkill(skill) || !!loreItemForSkill(actor, skill));
+function esotericLoreState(actor, npc) {
+  const configured = { slug: "esoteric-lore", label: "Esoteric Lore", lore: true };
+  const skill = actorSkillChoices(actor).find((choice) => choice.slug === configured.slug)
+    ?? (skillStatistic(actor, configured.slug, configured.label)?.roll ? configured : null);
+  if (!skill || !npc?.esotericLoreRelevant) return null;
+  const diverseLore = !!actor.items?.find?.((item) => item.slug === "diverse-lore");
+  if (!npc.esotericLoreMonsterHauntCurse && !diverseLore) return null;
+  return { ...skill, diverseLore: !npc.esotericLoreMonsterHauntCurse };
+}
+
+function availableSkillsForActor(actor, skills, npc = null) {
+  const esoteric = esotericLoreState(actor, npc);
+  return skills.filter((skill) => {
+    if (skill.slug === "esoteric-lore") return !!esoteric;
+    return !isLoreSkill(skill) || !!loreItemForSkill(actor, skill);
+  }).map((skill) => skill.slug === "esoteric-lore" ? { ...skill, diverseLore: esoteric?.diverseLore } : skill);
+}
+
+function ensureEsotericLoreChecks(encounter, npc) {
+  const lists = encounter.subsystemType === "influence" ? [npc.discovery, npc.influence] : [npc.influence];
+  for (const list of lists) {
+    if (list.some((skill) => skill.slug === "esoteric-lore")) continue;
+    const discovery = list === npc.discovery;
+    list.push({ id: randomID(), slug: "esoteric-lore", label: "Esoteric Lore", description: "", dc: automaticSkillDC(encounter, { lore: true }), dcModified: false, lore: true, secret: discovery ? false : undefined });
+  }
 }
 
 function actorSkillChoices(actor) {
@@ -2695,6 +2720,16 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     await super._onRender(context, options);
     this.element.addEventListener("input", () => { this._dirty = true; });
     this.element.addEventListener("change", () => { this._dirty = true; });
+    this.element.querySelectorAll("[data-esoteric-lore-relevant]").forEach((input) => input.addEventListener("change", async () => {
+      this._capture();
+      const npc = this.encounter.npcs[Number(input.dataset.npcIndex)];
+      if (!npc) return;
+      npc.esotericLoreRelevant = input.checked;
+      npc.esotericLoreMonsterHauntCurse = this.element.querySelector(`[name="npcs.${input.dataset.npcIndex}.esotericLoreMonsterHauntCurse"]`)?.checked ?? false;
+      if (npc.esotericLoreRelevant) ensureEsotericLoreChecks(this.encounter, npc);
+      this._dirty = true;
+      await this.render({ force: true });
+    }));
     for (const selector of ['[name="skillScoringMode"]', '[name="skillVictoryMode"]']) {
       this.element.querySelector(selector)?.addEventListener("change", async () => {
         this._capture();
@@ -2909,6 +2944,8 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     }
     this.encounter.npcs.forEach((npc, npcIndex) => {
       npc.nickname = this.element.querySelector(`[name="npcs.${npcIndex}.nickname"]`)?.value.trim() ?? "";
+      npc.esotericLoreRelevant = this.element.querySelector(`[name="npcs.${npcIndex}.esotericLoreRelevant"]`)?.checked ?? false;
+      npc.esotericLoreMonsterHauntCurse = this.element.querySelector(`[name="npcs.${npcIndex}.esotericLoreMonsterHauntCurse"]`)?.checked ?? false;
       npc.discovery.forEach((skill, skillIndex) => skill.secret = this.element.querySelector(`[name="npcs.${npcIndex}.discovery.${skillIndex}.secret"]`)?.checked ?? false);
       npc.influence.forEach((skill, skillIndex) => skill.lore = this.element.querySelector(`[name="npcs.${npcIndex}.influence.${skillIndex}.lore"]`)?.checked ?? false);
       npc.thresholds.forEach((threshold, thresholdIndex) => threshold.boons.forEach((boon, boonIndex) => {
@@ -3059,6 +3096,8 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       }
       this.encounter.npcs.forEach((npc, npcIndex) => {
         npc.nickname = this.element.querySelector(`[name="npcs.${npcIndex}.nickname"]`)?.value.trim() ?? "";
+        npc.esotericLoreRelevant = this.element.querySelector(`[name="npcs.${npcIndex}.esotericLoreRelevant"]`)?.checked ?? false;
+        npc.esotericLoreMonsterHauntCurse = this.element.querySelector(`[name="npcs.${npcIndex}.esotericLoreMonsterHauntCurse"]`)?.checked ?? false;
         npc.points = Math.max(0, Number(npc.points) || 0);
         npc.maximumPoints = Math.max(0, Number(npc.maximumPoints) || 0);
         for (const key of ["criticalFailure", "failure", "success", "criticalSuccess"]) npc.awards[key] = Number(npc.awards[key]) || 0;
@@ -3264,18 +3303,21 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
   }
   if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this ${isResearch ? "research interval" : (isChase || isSkill) ? "round" : "phase"}.`);
   let options = "";
+  let selectableSkills = [];
   if (type === "discovery") {
     const perception = npc.discovery.find((skill) => skill.slug === "perception");
     const diplomacy = npc.discovery.find((skill) => skill.slug === "diplomacy");
-    const primary = [perception, diplomacy].filter(Boolean)
+    const esoteric = availableSkillsForActor(actor, npc.discovery, npc).find((skill) => skill.slug === "esoteric-lore");
+    const primary = [perception, diplomacy, esoteric].filter(Boolean)
       .map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
-    const otherSkills = actorSkillChoices(actor).filter((skill) => !["perception", "diplomacy"].includes(skill.slug));
+    selectableSkills = [perception, diplomacy, esoteric].filter(Boolean);
+    const otherSkills = actorSkillChoices(actor).filter((skill) => !["perception", "diplomacy", "esoteric-lore"].includes(skill.slug));
     const remaining = otherSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
     options = `${primary}<option disabled>──────────</option>${remaining}`;
   } else {
-    const skills = availableSkillsForActor(actor, npc.influence);
-    if (!skills.length) return ui.notifications.warn(`${actor.name} has none of the configured ${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : "Influence"} checks.`);
-    options = skills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
+    selectableSkills = availableSkillsForActor(actor, npc.influence, npc);
+    if (!selectableSkills.length) return ui.notifications.warn(`${actor.name} has none of the configured ${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : "Influence"} checks.`);
+    options = selectableSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
   }
   new Dialog({
     title: `Make a Check: ${npcName}`,
@@ -3284,8 +3326,9 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
       const selection = String(html.find('[name="skill"]').val());
       const [source, value] = selection.split(":");
       const actorChoice = source === "actor" ? actorSkillChoices(actor).find((skill) => skill.slug === value) : null;
+      const configuredChoice = source === "configured" ? selectableSkills.find((skill) => skill.id === value) : null;
       const payload = { action: "check-request", encounterId: encounter.id, npcId: npc.id, requesterId: game.user.id, actorId: actor.id, type,
-        skillId: source === "configured" ? value : null, skillSlug: actorChoice?.slug ?? null, skillLabel: actorChoice?.label ?? null };
+        skillId: source === "configured" ? value : null, skillSlug: actorChoice?.slug ?? null, skillLabel: actorChoice?.label ?? null, diverseLore: !!configuredChoice?.diverseLore };
       if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
     } } }
   }).render(true);
@@ -3399,6 +3442,11 @@ async function adjudicate(request) {
       dc: Number(secret?.dc ?? list[0]?.dc ?? 20), invalidDiscovery: true };
   }
   if (!skill) return cancelPendingCheck(encounter.id, request.id, "The requested skill is no longer available.");
+  if (skill.slug === "esoteric-lore") {
+    const state = esotericLoreState(actor, npc);
+    if (!state) return cancelPendingCheck(encounter.id, request.id, "Esoteric Lore is not available for this target.");
+    request.diverseLore = !!state.diverseLore;
+  } else request.diverseLore = false;
   encounter.activeActorId = actor.id;
   encounter.activeNpcId = npc.id;
   await Store.save(encounter);
@@ -3407,12 +3455,13 @@ async function adjudicate(request) {
   renderCinematicHud();
   renderInfluenceSidebar();
   const mods = [
+    ...(request.diverseLore ? [{ id: "diverse-lore", label: "Diverse Lore", value: -2, type: "circumstance", mode: "roll", description: "Required for this subject", enforced: true }] : []),
     { id: "weakness", label: npc.weakness.label, value: npc.weakness.value, type: npc.weakness.type, mode: npc.weakness.mode ?? "roll", description: npc.weakness.description },
     { id: "strength", label: npc.strength.label, value: npc.strength.value, type: npc.strength.type, mode: npc.strength.mode ?? "roll", description: npc.strength.description },
     ...applicableBoons(encounter, request, skill).map((b) => ({ ...b, id: `boon:${b.id}`, description: b.mode === "dc" ? "DC adjustment" : "Unlocked boon" }))
   ].filter((modifier) => modifier.id.startsWith("boon:") || modifier.description || Number(modifier.value));
   const customMods = [];
-  const rows = mods.map((m) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${m.id}" ${m.id.startsWith("boon:") && m.activation === "automatic" ? "checked" : ""}> <strong>${esc(m.label)}</strong> ${signed(Number(m.value))} <small>${esc(m.description ?? "")}</small></label>`).join("");
+  const rows = mods.map((m) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${m.id}" ${(m.enforced || (m.id.startsWith("boon:") && m.activation === "automatic")) ? "checked" : ""} ${m.enforced ? "disabled" : ""}> <strong>${esc(m.label)}</strong> ${signed(Number(m.value))} <small>${esc(m.description ?? "")}</small></label>`).join("");
   const invalidNotice = skill.invalidDiscovery ? `<p class="hint"><strong>GM:</strong> This is not a valid Discovery skill for this encounter. The blind roll consumes the character's action but cannot grant a Discovery.</p>` : "";
   const content = `<form class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></form>`;
   const adjudicationContent = request.type === "research" ? content.replace(" influences ", " researches ") : request.type === "chase" ? content.replace(" influences ", " attempts ") : request.type === "skill" ? content.replace(" influences ", " tackles ") : content;
@@ -3440,7 +3489,7 @@ async function adjudicate(request) {
     buttons: {
       roll: { icon: '<i class="fas fa-dice-d20"></i>', label: "Confirm and Roll", callback: async (html) => {
         const selectedIds = html.find('[name="mod"]:checked').map((_, e) => e.value).get();
-        const selected = mods.map((m) => ({ ...m, selected: selectedIds.includes(m.id) }));
+        const selected = mods.map((m) => ({ ...m, selected: m.enforced || selectedIds.includes(m.id) }));
         selected.push(...customMods.map((mod) => ({ ...mod, selected: true })));
         const boonDcAdjust = selected.filter((m) => m.selected && m.mode === "dc").reduce((sum, m) => sum + Number(m.value), 0);
         const dcAdjust = (Number(html.find('[name="dcAdjust"]').val()) || 0) + boonDcAdjust;
