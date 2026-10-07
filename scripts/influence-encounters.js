@@ -83,6 +83,22 @@ function starshipActivity(id, label, skills, dc, description, options = {}) {
   return { id, label, skills, dc, description, allowLore, ...extra };
 }
 
+function starshipShipKey(starship, side) {
+  const fallback = side === "friendly" ? "primorata" : "heart";
+  const configured = starship?.[`${side}ShipId`];
+  return starship?.ships?.[configured] ? configured : fallback;
+}
+
+function starshipShip(starship, side) {
+  return starship?.ships?.[starshipShipKey(starship, side)] ?? null;
+}
+
+function starshipTargetShip(starship, target) {
+  if (["friendly", "primorata", "ally"].includes(target)) return starshipShip(starship, "friendly");
+  if (["hostile", "heart", "enemy"].includes(target) || !target) return starshipShip(starship, "hostile");
+  return starship?.ships?.[target] ?? starshipShip(starship, "hostile");
+}
+
 const STARSHIP_GUNNER_ACTIONS = [
   starshipActivity("plasma-battery", "Plasma Salvo", ["simple-ranged"], 21, "On a hit, deal 2d8+8 fire damage. The dependable damage option.", { difficulty: "Easy", damage: "2d8+8", damageType: "fire", target: "heart" }),
   starshipActivity("shieldbreaker", "Shieldbreaker Missile", ["simple-ranged"], 23, "On a hit, deal 2d6+6 electricity damage, ignoring the Heart’s current shields. On a critical hit, also prevent its next shield restoration.", { difficulty: "Average", damage: "2d6+6", damageType: "electricity", target: "heart", ignoresShields: true }),
@@ -96,12 +112,14 @@ function defaultStarshipData() {
     gunnerProfileVersion: 2,
     roleSelections: {},
     actionSelections: {},
-    countdown: { label: "Countdown", mode: "countup", value: 0, limit: 7 },
+    countdown: { enabled: true, label: "Countdown", mode: "countup", value: 0, limit: 7 },
     victoryMode: "calculated",
     outcome: "",
+    friendlyShipId: "primorata",
+    hostileShipId: "heart",
     ships: {
-      primorata: { actorId: "", name: "Primorata", image: `modules/${MODULE_ID}/assets/starship-icons/interceptor.svg`, playerStats: "explicit", hp: 95, maxHp: 95, shields: 9, shieldRefresh: 9, ac: 24, fortitude: 14, reflex: 17 },
-      heart: { actorId: "", name: "The Heart", image: `modules/${MODULE_ID}/assets/starship-icons/anomaly.svg`, playerStats: "vague", hp: 85, maxHp: 85, shields: 5, shieldRefresh: 5, ac: 21, fortitude: 0, reflex: 0, fireWeakness: 5 }
+      primorata: { actorId: "", name: "Primorata", image: `modules/${MODULE_ID}/assets/starship-icons/interceptor.svg`, playerStats: "explicit", hp: 95, maxHp: 95, shields: 9, maxShields: 9, shieldRegen: 9, shieldRefreshMode: "add", ac: 24, fortitude: 14, reflex: 17 },
+      heart: { actorId: "", name: "The Heart", image: `modules/${MODULE_ID}/assets/starship-icons/anomaly.svg`, playerStats: "vague", hp: 85, maxHp: 85, shields: 5, maxShields: 5, shieldRegen: 5, shieldRefreshMode: "add", ac: 21, fortitude: 0, reflex: 0, fireWeakness: 5 }
     },
     modifiers: [
       { id: "attack-run", label: "Attack Run", value: 1, type: "circumstance", description: "Pilot-created opening; set the final value for its degree of success." },
@@ -184,16 +202,27 @@ function starshipActivityFor(encounter, roleId, activityId) {
 function starshipActivityChoices(actor, activity) {
   if (!actor || !activity) return [];
   const choices = trainedSkillChoices(actor);
-  // Starship scenes routinely reward unexpected expertise. Every non-gunner
-  // crew activity offers the acting PC's trained Lore skills; the GM approves
-  // the narrative fit during the normal adjudication step.
-  const allowed = choices.filter((skill) => activity.skills.includes(skill.slug) || (!activity.skills.includes("simple-ranged") && skill.lore));
+  // Starship scenes can explicitly opt into narrative Lore substitutions.
+  const allowed = choices.filter((skill) => activity.skills.includes(skill.slug) || (!!activity.allowLore && skill.lore));
   if (activity.skills.includes("simple-ranged")) {
     return starshipSimpleRangedStatistic(actor)
       ? [{ slug: "simple-ranged", label: "Simple Ranged Weapons", lore: false, rank: Number(actor.system?.proficiencies?.attacks?.simple?.rank) || 0 }]
       : [];
   }
   return allowed;
+}
+
+function starshipFixedAttackStatistic(actor, bonus) {
+  if (!actor || !game.pf2e?.Check || !game.pf2e?.CheckModifier || !game.pf2e?.Modifier) return null;
+  const modifier = new game.pf2e.Modifier({ slug: "starship-fixed-attack", label: "Ship Weapon Attack", modifier: Number(bonus) || 0, type: "untyped" });
+  return {
+    rank: 1,
+    mod: modifier.modifier,
+    async roll(options = {}) {
+      const check = new game.pf2e.CheckModifier("starship-fixed-attack", { modifiers: [modifier] }, options.modifiers ?? []);
+      return game.pf2e.Check.roll(check, { ...options, actor, type: "attack-roll", title: options.label ?? "Starship Gunnery" });
+    }
+  };
 }
 
 function starshipSimpleRangedStatistic(actor) {
@@ -238,6 +267,7 @@ function starshipShipContext(ship) {
 }
 
 function starshipClockReached(clock = {}) {
+  if (!clock.enabled) return false;
   const value = Math.max(0, Number(clock.value) || 0);
   const limit = Math.max(1, Number(clock.limit) || 1);
   return clock.mode === "countdown" ? value <= 0 : value >= limit;
@@ -252,8 +282,8 @@ function starshipClockDisplay(clock = {}) {
 function starshipCalculatedOutcome(encounter) {
   const starship = encounter?.starship;
   if (!starship || starship.victoryMode !== "calculated") return starship?.outcome || "";
-  if (Number(starship.ships?.heart?.hp) <= 0) return "victory";
-  if (Number(starship.ships?.primorata?.hp) <= 0 || starshipClockReached(starship.countdown)) return "failure";
+  if (Number(starshipShip(starship, "hostile")?.hp) <= 0) return "victory";
+  if (Number(starshipShip(starship, "friendly")?.hp) <= 0 || starshipClockReached(starship.countdown)) return "failure";
   return "";
 }
 
@@ -309,16 +339,18 @@ function starshipTrackerContext(encounter) {
   );
   const starshipOutcome = starshipCalculatedOutcome(encounter);
   const clock = { ...starship.countdown, display: starshipClockDisplay(starship.countdown) };
+  const friendlyShip = starshipShip(starship, "friendly");
+  const hostileShip = starshipShip(starship, "hostile");
   const finished = !!starshipOutcome;
   const pendingChecks = game.user.isGM ? (encounter.pendingChecks ?? []).map((request, index) => {
     const actor = game.actors.get(request.actorId);
     const activity = starshipActivityFor(encounter, request.roleId, request.activityId);
-    return { ...request, position: index + 1, actorName: actor ? participantDisplayName(encounter, actor) : "Missing PC", npcName: starship.ships.heart.name, skillLabel: request.skillLabel ?? "Unknown statistic", activityLabel: activity?.label ?? "Starship action" };
+    return { ...request, position: index + 1, actorName: actor ? participantDisplayName(encounter, actor) : "Missing PC", npcName: hostileShip?.name ?? "Hostile ship", skillLabel: request.skillLabel ?? "Unknown statistic", activityLabel: activity?.label ?? "Starship action" };
   }) : [];
   return {
     encounter, starship: { ...starship, countdown: clock, outcome: starshipOutcome }, starshipOutcome, isStarship: true, isGM: game.user.isGM, noEncounter: false, isPaused: encounter.status === "paused",
-    primorata: starshipShipContext(starship.ships.primorata),
-    heart: starshipShipContext(starship.ships.heart),
+    primorata: starshipShipContext(friendlyShip),
+    heart: starshipShipContext(hostileShip),
     actors: participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter.actorsActed?.[actor.id], roleLabel: starshipRole(encounter, starship.roleSelections[actor.id])?.label ?? "Unassigned" })),
     checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry, typeLabel: entry.type === "starship" ? "Crew Action" : entry.type, displayOutcome: entry.outcome })),
     controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, finished, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
@@ -327,6 +359,7 @@ function starshipTrackerContext(encounter) {
     canTakeStarshipAction: encounter.status === "active" && starship.stage === "actions" && !!selectedActor && !!selectedRole && !!selectedActionId && !!selectedSkillSlug && !encounter.actorsActed?.[selectedActor.id] && !finished,
     canNextStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "actions" && !encounter.pendingChecks?.length && !finished,
     canPause: game.user.isGM && encounter.status === "active", canResume: game.user.isGM && encounter.status === "paused", canOpenForPlayers: game.user.isGM && encounter.status === "active",
+    hasStarshipClock: clock.enabled,
     canDeclareStarshipOutcome: game.user.isGM && encounter.status === "active" && starship.victoryMode === "gm" && !starshipOutcome
   };
 }
@@ -535,6 +568,7 @@ function isGeneratedPlaceholderNpc(encounter, npc) {
 function normalizeEncounterCollections(encounter) {
   encounter.subsystemType = ["influence", "research", "chase", "skill", "starship"].includes(encounter.subsystemType) ? encounter.subsystemType : "influence";
   if (encounter.subsystemType === "starship") {
+    const savedShips = deepClone(encounter.starship?.ships ?? {});
     const savedGunnerActivities = indexedArray(encounter.starship?.roles).find((role) => role.id === "gunner")?.activities;
     const migrateLegacyGunnerActions = indexedArray(savedGunnerActivities).some((activity) => ["Plasma Battery", "Shieldbreaker", "Suppress", "Called Shot: Core"].includes(activity.label))
       || indexedArray(savedGunnerActivities).some((activity) => STARSHIP_GUNNER_ACTIONS.some((replacement) => replacement.id === activity.id) && !activity.difficulty);
@@ -550,14 +584,26 @@ function normalizeEncounterCollections(encounter) {
     encounter.starship.countdown.limit = Math.max(1, Number(encounter.starship.countdown.limit) || 7);
     encounter.starship.countdown.label = String(encounter.starship.countdown.label || "Countdown").trim() || "Countdown";
     encounter.starship.countdown.mode = ["countup", "countdown", "points"].includes(encounter.starship.countdown.mode) ? encounter.starship.countdown.mode : "countup";
+    encounter.starship.countdown.enabled = encounter.starship.countdown.enabled !== false;
     encounter.starship.victoryMode = encounter.starship.victoryMode === "gm" ? "gm" : "calculated";
     encounter.starship.outcome = ["victory", "failure"].includes(encounter.starship.outcome) ? encounter.starship.outcome : "";
-    for (const ship of Object.values(encounter.starship.ships)) {
+    encounter.starship.friendlyShipId = starshipShipKey(encounter.starship, "friendly");
+    encounter.starship.hostileShipId = starshipShipKey(encounter.starship, "hostile");
+    for (const [shipId, ship] of Object.entries(encounter.starship.ships)) {
+      const savedShip = savedShips[shipId] ?? {};
       ship.actorId ||= "";
       ship.playerStats = ["explicit", "vague", "hidden"].includes(ship.playerStats) ? ship.playerStats : "vague";
       ship.maxHp = Math.max(1, Number(ship.maxHp) || 1);
       ship.hp = Math.max(0, Math.min(ship.maxHp, Number(ship.hp) || 0));
-      ship.shields = Math.max(0, Number(ship.shields) || 0);
+      // Legacy scenes used shieldRefresh as both the display maximum and a full refill.
+      // Preserve that behavior only when those new fields were absent in saved data.
+      const legacyRefresh = !Object.hasOwn(savedShip, "maxShields") && !Object.hasOwn(savedShip, "shieldRegen");
+      ship.maxShields = Math.max(0, Number(savedShip.maxShields ?? Math.max(Number(ship.maxShields) || 0, Number(savedShip.shields) || 0, Number(ship.shieldRefresh) || 0)) || 0);
+      ship.shieldRegen = Math.max(0, Number(savedShip.shieldRegen ?? ship.shieldRegen ?? ship.shieldRefresh) || 0);
+      ship.shieldRefreshMode = legacyRefresh
+        ? (Number(savedShip.shields) > Number(savedShip.shieldRefresh) ? "add" : "set")
+        : (ship.shieldRefreshMode === "set" ? "set" : "add");
+      ship.shields = Math.max(0, Math.min(ship.maxShields, Number(ship.shields) || 0));
       ship.shieldRefresh = Math.max(0, Number(ship.shieldRefresh) || 0);
     }
     for (const role of encounter.starship.roles) {
@@ -567,6 +613,8 @@ function normalizeEncounterCollections(encounter) {
         activity.skills = Array.isArray(activity.skills) ? activity.skills : String(activity.skills ?? "").split(",").map((skill) => skillSlug(skill)).filter(Boolean);
         activity.dc = Math.max(0, Number(activity.dc) || levelBasedDC(encounter.level));
         activity.allowLore = !!activity.allowLore;
+        const fixedAttack = String(activity.description ?? "").match(/\bfixed\s*\+(\d+)\b/i);
+        if (!(Number(activity.attackBonus) > 0) && fixedAttack) activity.attackBonus = Number(fixedAttack[1]);
       }
     }
     migrateStarshipGunnerActions(encounter.starship, migrateLegacyGunnerActions);
@@ -2070,6 +2118,7 @@ class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.s
       "new-encounter": (event, target) => handleSidebarAction({ currentTarget: target }),
       "new-folder": (event, target) => handleSidebarAction({ currentTarget: target }),
       "clear-search": (event, target) => handleSidebarAction({ currentTarget: target }),
+      "toggle-folder": (event, target) => handleSidebarAction({ currentTarget: target }),
       "open-encounter": (event, target) => handleSidebarAction({ currentTarget: target })
     },
     window: {
@@ -2134,6 +2183,10 @@ class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.s
       label: "Duplicate as New Draft",
       icon: "fa-solid fa-copy",
       onClick: (_event, li) => duplicateEncounter(getEncounter(li).id)
+    }, {
+      label: "Move to Folder",
+      icon: "fa-solid fa-folder-tree",
+      onClick: (event, li) => promptEncounterFolderMove(event, getEncounter(li).id)
     }, {
       label: "Export Data",
       icon: "fa-solid fa-file-export",
@@ -2229,12 +2282,14 @@ function renderEncounterDirectory() {
     const expanded = query || !collapsedInfluenceFolders.has(folder.id);
     const colorStyle = folder.color ? ` style="background-color:${esc(folder.color)}"` : "";
     const borderStyle = folder.color ? ` style="border-left-color:${esc(folder.color)}"` : "";
-    return `<li class="directory-item folder flexcol influence-folder ${expanded ? "expanded" : ""}" data-folder-id="${folder.id}"><header class="folder-header"${colorStyle}><i class="fa-solid fa-folder-open fa-fw" inert></i><span class="folder-name ellipsis">${esc(folder.name)}</span><button type="button" class="create-button create-entry icon icon-plus fa-solid fa-comments" data-action="new-encounter" data-folder-id="${folder.id}" data-tooltip aria-label="Create Encounter"></button></header><ol class="subdirectory plain"${borderStyle}>${children.map(encounterDirectoryEntry).join("")}</ol></li>`;
+    return `<li class="directory-item folder flexcol influence-folder ${expanded ? "expanded" : ""}" data-folder-id="${folder.id}"><header class="folder-header" data-action="toggle-folder" data-folder-id="${folder.id}"${colorStyle}><i class="fa-solid fa-folder-open fa-fw" inert></i><span class="folder-name ellipsis">${esc(folder.name)}</span><button type="button" class="create-button create-entry icon icon-plus fa-solid fa-comments" data-action="new-encounter" data-folder-id="${folder.id}" data-tooltip aria-label="Create Encounter"></button></header><ol class="subdirectory plain"${borderStyle}>${children.map(encounterDirectoryEntry).join("")}</ol></li>`;
   }).join("");
   return `<header class="directory-header"><div class="header-actions action-buttons flexrow"><button type="button" data-action="new-encounter"><i class="fa-solid fa-file-circle-plus"></i> Create Encounter</button><button type="button" data-action="new-folder"><i class="fa-solid fa-folder-plus"></i> Create Folder</button></div><search class="directory-search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" name="search" value="${esc(influenceSidebarSearch)}" autocomplete="off" placeholder="Search Encounters"><button type="button" class="inline-control icon fa-solid fa-xmark" data-action="clear-search" aria-label="Clear Search"></button></search></header><ol class="directory-list plain">${rootEntries.sort((a, b) => a.name.localeCompare(b.name)).map(encounterDirectoryEntry).join("")}${folderHtml}${!encounters.length && !folders.length ? '<li class="directory-item"><p class="hint">No influence encounters found.</p></li>' : ""}</ol>`;
 }
 
-function activateEncounterDirectoryListeners(panel) {
+function activateEncounterDirectoryListeners(panel, signal) {
+  const isEncounterDrag = (event) => Array.from(event.dataTransfer?.types ?? []).some((type) => ["application/x-influence-encounter", "text/plain"].includes(type));
+  const encounterDragId = (event) => event.dataTransfer?.getData("application/x-influence-encounter") || event.dataTransfer?.getData("text/plain");
   const search = panel.querySelector('.directory-search input[name="search"]');
   search?.addEventListener("input", () => {
     influenceSidebarSearch = search.value;
@@ -2247,52 +2302,48 @@ function activateEncounterDirectoryListeners(panel) {
       const childMatches = [...folder.querySelectorAll(".influence-sidebar-encounter")].some((entry) => !entry.hidden);
       folder.hidden = !!query && !folderMatches && !childMatches;
     });
-  });
+  }, { signal });
   panel.querySelectorAll(".influence-sidebar-encounter").forEach((entry) => {
     entry.addEventListener("dragstart", (event) => {
       event.dataTransfer.setData("application/x-influence-encounter", entry.dataset.entryId);
+      event.dataTransfer.setData("text/plain", entry.dataset.entryId);
       event.dataTransfer.effectAllowed = "move";
-    });
+    }, { signal });
   });
   panel.querySelectorAll(".influence-folder").forEach((folder) => {
     const header = folder.querySelector(".folder-header");
-    header?.addEventListener("click", (event) => {
-      if (event.target.closest("button")) return;
-      const id = folder.dataset.folderId;
-      if (collapsedInfluenceFolders.has(id)) collapsedInfluenceFolders.delete(id);
-      else collapsedInfluenceFolders.add(id);
-      folder.classList.toggle("expanded");
-    });
     header?.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
       showFolderContextMenu(event, folder.dataset.folderId);
-    });
+    }, { signal });
     folder.addEventListener("dragover", (event) => {
-      if (!event.dataTransfer.types.includes("application/x-influence-encounter")) return;
+      if (!isEncounterDrag(event)) return;
       event.preventDefault();
       folder.classList.add("droptarget");
-    });
-    folder.addEventListener("dragleave", () => folder.classList.remove("droptarget"));
+    }, { signal });
+    folder.addEventListener("dragleave", () => folder.classList.remove("droptarget"), { signal });
     folder.addEventListener("drop", async (event) => {
-      const id = event.dataTransfer.getData("application/x-influence-encounter");
+      const id = encounterDragId(event);
       if (!id) return;
       event.preventDefault();
       event.stopPropagation();
       folder.classList.remove("droptarget");
       await moveEncounterToFolder(id, folder.dataset.folderId);
-    });
+    }, { signal });
   });
   const root = panel.querySelector(":scope > .directory-list");
   root?.addEventListener("dragover", (event) => {
-    if (event.target.closest(".influence-folder") || !event.dataTransfer.types.includes("application/x-influence-encounter")) return;
+    if (event.target.closest(".influence-folder") || !isEncounterDrag(event)) return;
     event.preventDefault();
-  });
+  }, { signal });
   root?.addEventListener("drop", async (event) => {
     if (event.target.closest(".influence-folder")) return;
-    const id = event.dataTransfer.getData("application/x-influence-encounter");
-    if (id) await moveEncounterToFolder(id, "");
-  });
+    const id = encounterDragId(event);
+    if (!id) return;
+    event.preventDefault();
+    await moveEncounterToFolder(id, "");
+  }, { signal });
 }
 
 function openSidebarEncounter(id) {
@@ -2307,6 +2358,24 @@ async function moveEncounterToFolder(id, folderId) {
   if (!encounter || encounter.folderId === folderId) return;
   encounter.folderId = folderId;
   await Store.save(encounter);
+  renderInfluenceSidebar();
+  if (game.user.isGM) game.socket.emit(SOCKET, { action: "refresh" });
+}
+
+async function promptEncounterFolderMove(event, encounterId) {
+  const encounter = Store.get(encounterId);
+  if (!encounter) return;
+  const folders = FolderStore.all().sort((a, b) => a.name.localeCompare(b.name));
+  const options = [`<option value="">Unfiled</option>`, ...folders.map((folder) => `<option value="${esc(folder.id)}"${folder.id === encounter.folderId ? " selected" : ""}>${esc(folder.name)}</option>`)].join("");
+  return foundry.applications.api.DialogV2.prompt({
+    window: { title: "Move Encounter to Folder" },
+    content: `<form><div class="form-group"><label>Folder</label><div class="form-fields"><select name="folder">${options}</select></div></div></form>`,
+    ok: {
+      label: "Move",
+      callback: async (_event, button) => moveEncounterToFolder(encounterId, new foundry.applications.ux.FormDataExtended(button.form).object.folder || "")
+    },
+    position: { width: 320, left: event.clientX, top: event.clientY }
+  });
 }
 
 class InfluenceFolderConfig extends foundry.applications.sheets.FolderConfig {
@@ -2713,10 +2782,16 @@ function importEncounterData() {
       Object.assign(imported, {
         id: randomID(), name: uniqueEncounterName(imported.name), status: "draft",
         currentPhase: 1, currentRound: 1, points: 0, researchPoints: 0, skillPoints: 0, skillPointsByActor: {},
-        chaseOutcome: "", skillOutcome: "", skillWinnerActorId: "", participantIds: null, activeActorId: "", actorsActed: {}, phaseActions: {},
+        chaseOutcome: "", skillOutcome: "", skillWinnerActorId: "", participantIds: imported.subsystemType === "starship" ? imported.participantIds : null, activeActorId: "", actorsActed: {}, phaseActions: {},
         discoveries: {}, activeEffects: [], checkLog: [], history: [], journalId: "",
         endedAt: null, presentationVisible: true
       });
+      if (imported.subsystemType === "starship") {
+        imported.starship.stage = "role-selection";
+        imported.starship.roleSelections = {};
+        imported.starship.actionSelections = {};
+        imported.starship.outcome = "";
+      }
       imported.npcs.forEach((npc) => {
         npc.actorId = "";
         npc.points = 0;
@@ -2763,6 +2838,13 @@ async function deleteEncounter(id) {
 async function handleSidebarAction(event) {
   const action = event.currentTarget.dataset.action ?? event.currentTarget.dataset.influenceAction;
   if (action === "open-directory-encounter") return openSidebarEncounter(event.currentTarget.dataset.id);
+  if (action === "toggle-folder" && game.user.isGM) {
+    const folderId = event.currentTarget.dataset.folderId;
+    if (!folderId) return;
+    if (collapsedInfluenceFolders.has(folderId)) collapsedInfluenceFolders.delete(folderId);
+    else collapsedInfluenceFolders.add(folderId);
+    return renderInfluenceSidebar();
+  }
   if (action === "new-encounter" && game.user.isGM) {
     event.stopPropagation?.();
     return openCreateEncounterDialog(event, event.currentTarget.dataset.folderId || "");
@@ -2965,6 +3047,10 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       starshipActors,
       starshipActorChoices: { "": shipsFolders.length ? "Choose an Actor from Ships…" : "No Actor folder named Ships found", ...Object.fromEntries(starshipActors.map((actor) => [actor.id, actor.name])) },
       starshipFallbackIcons: STARSHIP_FALLBACK_ICONS,
+      friendlyStarshipKey: isStarship ? starshipShipKey(this.encounter.starship, "friendly") : "primorata",
+      hostileStarshipKey: isStarship ? starshipShipKey(this.encounter.starship, "hostile") : "heart",
+      friendlyStarship: isStarship ? starshipShip(this.encounter.starship, "friendly") : null,
+      hostileStarship: isStarship ? starshipShip(this.encounter.starship, "hostile") : null,
       starshipShipStatModes: { explicit: "Show Explicit Ship Stats", vague: "Show Vague Ship Stats", hidden: "Hide Ship Stats" },
       starshipClockModes: { countup: "Count Up (0 to limit)", countdown: "Count Down (limit to 0)", points: "Points tracker (keeps increasing)" },
       starshipVictoryModes: { calculated: "Calculated", gm: "Manual — GM decides" },
@@ -3577,9 +3663,17 @@ async function nextStarshipRound(encounterId) {
   encounter.starship.roleSelections = {};
   encounter.starship.actionSelections = {};
   encounter.starship.stage = "role-selection";
-  for (const ship of Object.values(encounter.starship.ships)) ship.shields = ship.shieldRefresh;
+  for (const ship of Object.values(encounter.starship.ships)) {
+    const suppressed = !!ship.shieldRegenSuppressed;
+    ship.shields = suppressed
+      ? ship.shields
+      : ship.shieldRefreshMode === "set"
+        ? Math.min(ship.maxShields, ship.shieldRegen)
+        : Math.min(ship.maxShields, Number(ship.shields) + ship.shieldRegen);
+    ship.shieldRegenSuppressed = false;
+  }
   await Store.save(encounter);
-  await ChatMessage.create({ content: `<div class="influence-chat influence-result"><strong>Starship Round ${encounter.currentRound}</strong><p>Crew roles are open for selection. Shields refresh to their configured values.</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+  await ChatMessage.create({ content: `<div class="influence-chat influence-result"><strong>Starship Round ${encounter.currentRound}</strong><p>Crew roles are open for selection. Shields regenerate where applicable.</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
@@ -3593,7 +3687,7 @@ async function adjustStarshipValue(encounterId, path, delta) {
     const [shipId, key] = String(path).split(".");
     const ship = encounter.starship.ships[shipId];
     if (!ship || !["hp", "shields"].includes(key)) return;
-    ship[key] = Math.max(0, Math.min(key === "hp" ? ship.maxHp : Number.POSITIVE_INFINITY, Number(ship[key]) + delta));
+    ship[key] = Math.max(0, Math.min(key === "hp" ? ship.maxHp : ship.maxShields, Number(ship[key]) + delta));
   }
   updateStarshipCalculatedOutcome(encounter);
   await Store.save(encounter);
@@ -3623,7 +3717,7 @@ async function requestStarshipCheck(encounter, actorId) {
   const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === selection?.skillSlug);
   if (!actor || !activity || !skill) return ui.notifications.warn("Choose a role, activity, and trained eligible statistic first.");
   if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this round.`);
-  const payload = { action: "check-request", encounterId: encounter.id, npcId: "starship-heart", requesterId: game.user.id, actorId: actor.id, type: "starship", roleId, activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label };
+  const payload = { action: "check-request", encounterId: encounter.id, npcId: starshipShipKey(encounter.starship, "hostile"), requesterId: game.user.id, actorId: actor.id, type: "starship", roleId, activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label };
   if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
 }
 
@@ -3748,7 +3842,7 @@ async function enqueueCheckRequest(payload) {
   const skillList = request.type === "discovery" ? npc?.discovery : npc?.influence;
   const skill = starship ? starshipActivityChoices(actor, starshipActivityFor(encounter, request.roleId, request.activityId)).find((entry) => entry.slug === request.skillSlug) : skillList.find((entry) => entry.id === request.skillId || entry.slug === request.skillSlug);
   const actorName = participantDisplayName(encounter, actor);
-  const npcName = starship ? encounter.starship.ships.heart.name : targetDisplayName(npc);
+  const npcName = starship ? (starshipShip(encounter.starship, "hostile")?.name ?? "Hostile ship") : targetDisplayName(npc);
   const requestLine = starship
     ? `${esc(actorName)} requested ${esc(starshipActivityFor(encounter, request.roleId, request.activityId)?.label ?? "a crew action")} using ${esc(skill?.label ?? request.skillLabel ?? "an unknown statistic")}.`
     : `${esc(actorName)} requested a check against ${esc(npcName)} using ${esc(skill?.label ?? request.skillLabel ?? "an unknown skill")}.`;
@@ -3902,8 +3996,10 @@ async function adjudicateStarship(request, encounter, actor) {
 }
 
 async function executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, dcAdjust) {
-  const statistic = skill.slug === "simple-ranged"
-    ? starshipSimpleRangedStatistic(actor)
+  const statistic = Number(activity.attackBonus) > 0
+    ? starshipFixedAttackStatistic(actor, Number(activity.attackBonus))
+    : skill.slug === "simple-ranged"
+      ? starshipSimpleRangedStatistic(actor)
     : skillStatistic(actor, skill.slug, skill.label);
   if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
   const rollModifiers = selected.map((modifier) => new game.pf2e.Modifier({ slug: `starship-${String(modifier.id).slugify()}`, label: modifier.label, modifier: Number(modifier.value), type: modifier.type || "untyped" }));
@@ -3922,7 +4018,8 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
   const actorName = participantDisplayName(encounter, actor);
   snapshot(encounter, `${actorName}: ${activity.label}`);
-  const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: "starship-heart", npcName: encounter.starship.ships.heart.name, type: "starship", skillLabel: skill.label, outcome, phase: encounter.currentRound, timestamp: Date.now(), detailLabel: role.label, details: [activity.label] };
+  const hostileShip = starshipShip(encounter.starship, "hostile");
+  const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: starshipShipKey(encounter.starship, "hostile"), npcName: hostileShip?.name ?? "Hostile ship", type: "starship", skillLabel: skill.label, outcome, phase: encounter.currentRound, timestamp: Date.now(), detailLabel: role.label, details: [activity.label] };
   encounter.checkLog.push(logEntry);
   encounter.actorsActed[actor.id] = true;
   encounter.pendingChecks = encounter.pendingChecks.filter((entry) => entry.id !== request.id);
@@ -3930,7 +4027,8 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   if (activity.damage && degree >= 2) {
     const formula = degree === 3 ? `(${activity.damage}) * 2` : activity.damage;
     const damageRoll = await new Roll(formula).evaluate({ async: true });
-    const target = encounter.starship.ships[activity.target ?? "heart"];
+    const target = starshipTargetShip(encounter.starship, activity.target);
+    if (!target) return ui.notifications.error("This starship action has no valid target ship.");
     const rawDamage = Number(damageRoll.total) || 0;
     const weakness = activity.damageType === "fire" ? Math.max(0, Number(target.fireWeakness) || 0) : 0;
     const totalDamage = rawDamage + weakness;
@@ -3941,7 +4039,7 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
     damageReport = `<p><strong>${esc(activity.label)}</strong> hits ${esc(target.name)} for ${rawDamage} ${esc(activity.damageType ?? "")}${weakness ? ` + ${weakness} fire weakness` : ""}. Shields absorb ${shieldDamage}; hull takes ${hullDamage} damage.</p>`;
     logEntry.details.push(`${rawDamage} ${activity.damageType ?? "damage"}; shields absorbed ${shieldDamage}; hull damage ${hullDamage}.`);
   } else if (activity.damage) {
-    damageReport = `<p><strong>${esc(activity.label)}</strong> misses ${esc(encounter.starship.ships[activity.target ?? "heart"].name)}.</p>`;
+    damageReport = `<p><strong>${esc(activity.label)}</strong> misses ${esc(starshipTargetShip(encounter.starship, activity.target)?.name ?? "the target")}.</p>`;
   }
   const starshipOutcome = updateStarshipCalculatedOutcome(encounter);
   if (starshipOutcome) logEntry.details.push(starshipOutcome === "victory" ? "Starship victory." : "Starship defeat.");

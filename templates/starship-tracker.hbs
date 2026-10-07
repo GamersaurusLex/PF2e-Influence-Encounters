@@ -2,16 +2,16 @@
   <header class="encounter-header starship-header">
     <img src="{{heart.image}}" alt="{{heart.name}}">
     <div><h2>{{encounter.name}}{{#if isPaused}} (Paused){{/if}}</h2><p>Round {{encounter.currentRound}} · {{#if roleSelectionStage}}Crew role selection{{else}}Crew actions{{/if}}{{#if starshipOutcome}} · {{starshipOutcome}}{{/if}}</p></div>
-    <div class="points">{{starship.countdown.label}} {{starship.countdown.display}}</div>
+    {{#if hasStarshipClock}}<div class="points">{{starship.countdown.label}} {{starship.countdown.display}}</div>{{/if}}
   </header>
   <nav class="tracker-tabs tabs" data-group="tracker"><a class="item" data-tab="encounter"><i class="fas fa-shuttle-space"></i> Starship Encounter</a><a class="item" data-tab="log"><i class="fas fa-list"></i> Check Log</a></nav>
   <div class="tracker-content">
     <div class="tab" data-group="tracker" data-tab="encounter">
       <section class="starship-status-grid">
-        <article class="npc-profile starship-ship-card"><img src="{{primorata.image}}" alt="{{primorata.name}}"><div><h3>{{primorata.name}}</h3>{{#if primorata.showHullStatus}}<p>{{primorata.hullStatus}}</p>{{/if}}{{#if primorata.showExplicitStats}}<small>Hull {{primorata.hp}} / {{primorata.maxHp}} · Shields {{primorata.shields}} / {{primorata.shieldRefresh}} · AC {{primorata.ac}}</small>{{/if}}</div></article>
-        <article class="npc-profile starship-ship-card"><img src="{{heart.image}}" alt="{{heart.name}}"><div><h3>{{heart.name}}</h3>{{#if heart.showHullStatus}}<p>{{heart.hullStatus}}</p>{{/if}}{{#if heart.showExplicitStats}}<small>Hull {{heart.hp}} / {{heart.maxHp}} · Shields {{heart.shields}} / {{heart.shieldRefresh}} · AC {{heart.ac}}</small>{{/if}}</div></article>
+        <article class="npc-profile starship-ship-card"><img src="{{primorata.image}}" alt="{{primorata.name}}"><div><h3>{{primorata.name}}</h3>{{#if primorata.showHullStatus}}<p>{{primorata.hullStatus}}</p>{{/if}}{{#if primorata.showExplicitStats}}<small>Hull {{primorata.hp}} / {{primorata.maxHp}} · Shields {{primorata.shields}} / {{primorata.maxShields}} · AC {{primorata.ac}}</small>{{/if}}</div></article>
+        <article class="npc-profile starship-ship-card"><img src="{{heart.image}}" alt="{{heart.name}}"><div><h3>{{heart.name}}</h3>{{#if heart.showHullStatus}}<p>{{heart.hullStatus}}</p>{{/if}}{{#if heart.showExplicitStats}}<small>Hull {{heart.hp}} / {{heart.maxHp}} · Shields {{heart.shields}} / {{heart.maxShields}} · AC {{heart.ac}}</small>{{/if}}</div></article>
       </section>
-      <section class="npc-profile starship-countdown"><strong>{{starship.countdown.label}}</strong><span>{{starship.countdown.display}}</span>{{#if isGM}}<button data-action="starship-adjust" data-path="countdown" data-delta="-1"><i class="fas fa-minus"></i></button><button data-action="starship-adjust" data-path="countdown" data-delta="1"><i class="fas fa-plus"></i></button>{{/if}}</section>
+      {{#if hasStarshipClock}}<section class="npc-profile starship-countdown"><strong>{{starship.countdown.label}}</strong><span>{{starship.countdown.display}}</span>{{#if isGM}}<button data-action="starship-adjust" data-path="countdown" data-delta="-1"><i class="fas fa-minus"></i></button><button data-action="starship-adjust" data-path="countdown" data-delta="1"><i class="fas fa-plus"></i></button>{{/if}}</section>{{/if}}
       <section class="starship-crew-roster"><div class="starship-section-heading"><h3>Crew</h3><small>Round assignments</small></div>
       <ul class="participant-roster">{{#each actors}}<li class="{{#if acted}}acted{{/if}}"><i class="fas {{#if acted}}fa-check-circle{{else}}fa-circle{{/if}}"></i> {{name}} <small>— {{roleLabel}}{{#if acted}}, acted{{/if}}</small></li>{{/each}}</ul>
       </section>

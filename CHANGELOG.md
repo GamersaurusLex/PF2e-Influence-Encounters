@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.3 — 2026-10-07
+
+- Repaired encounter-directory folders: native collapse/expand actions work reliably, folder moves immediately rerender and synchronize, and the encounter context menu now includes **Move to Folder** as a direct fallback to drag-and-drop.
+- Extended the SF2e cinematic starship encounter: configurable linked friendly/hostile ships, selectable fallback art, named optional count-up/countdown/points trackers, calculated or GM-decided outcomes, player-facing explicit/vague/hidden ship stats, shield maximums and regeneration, and configurable Lore/attack options for crew activities.
+
 ## 0.8.2 — 2026-10-07
 
 - Turned Beat the Clock Chases into a true timed-escape mode: no pursuit subject, active obstacle progression only, a required round limit, and a Time Expired result if the final obstacle is not cleared in time.
