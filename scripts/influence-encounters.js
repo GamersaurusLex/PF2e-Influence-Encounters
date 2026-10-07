@@ -690,6 +690,8 @@ function normalizeEncounterCollections(encounter) {
       // GM-authored so a future level change can never overwrite them.
       skill.dcModified = typeof skill.dcModified === "boolean" ? skill.dcModified : skill.dcModified === "false" ? false : true;
     }
+    npc.discovery.forEach((skill) => skill.secret = !!skill.secret);
+    npc.influence.forEach((skill) => skill.known = !!skill.known);
     npc.weakness = foundry.utils.mergeObject(deepClone(encounter.weakness ?? DEFAULT_ENCOUNTER.weakness), npc.weakness ?? {}, { inplace: false, overwrite: true });
     npc.strength = foundry.utils.mergeObject(deepClone(encounter.strength ?? DEFAULT_ENCOUNTER.strength), npc.strength ?? {}, { inplace: false, overwrite: true });
     npc.weakness.mode ??= "roll";
@@ -1549,6 +1551,41 @@ function trainedSkillChoices(actor) {
   return actorSkillChoices(actor).filter((skill) => skill.rank >= 1);
 }
 
+function trainedAttemptSkills(actor, npc) {
+  const esoteric = esotericLoreState(actor, npc);
+  const skills = trainedSkillChoices(actor);
+  // Perception is a rollable PF2e/SF2e statistic, not an entry in actor.skills.
+  // Every PC can attempt it, so give it the same first-class treatment as a
+  // trained skill in encounter pickers.
+  const perception = skillStatistic(actor, "perception", "Perception");
+  if (perception?.roll && !skills.some((skill) => skill.slug === "perception")) {
+    skills.push({
+      slug: "perception",
+      label: game.i18n.localize(perception.label ?? "Perception"),
+      lore: false,
+      rank: Math.max(1, Number(perception.rank ?? actor?.perception?.rank) || 1)
+    });
+  }
+  return skills
+    .filter((skill) => skill.slug !== "esoteric-lore" || !!esoteric)
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function knownConfiguredSkills(actor, skills, npc, property) {
+  const trained = new Map(trainedAttemptSkills(actor, npc).map((skill) => [skill.slug, skill]));
+  return availableSkillsForActor(actor, skills, npc)
+    .filter((skill) => property === "secret" ? !skill.secret : !!skill[property])
+    .flatMap((skill) => {
+      const actorSkill = trained.get(skill.slug);
+      return actorSkill ? [{ ...actorSkill, ...skill, rank: actorSkill.rank }] : [];
+    });
+}
+
+function speculativeAttemptSkills(actor, npc, knownSkills) {
+  const known = new Set(knownSkills.map((skill) => skill.slug));
+  return trainedAttemptSkills(actor, npc).filter((skill) => !known.has(skill.slug));
+}
+
 function concealDiscoveryDC(fact) {
   const text = String(fact ?? "");
   let match = text.match(/^(.+?) DC \d+\.?$/i);
@@ -1649,8 +1686,8 @@ class InfluenceTracker extends Application {
       typeLabel: entry.type === "research" ? "Research" : entry.type === "chase" ? "Chase" : entry.type === "skill" ? "Skill" : entry.type === "discovery" ? "Discovery" : "Influence",
       pendingDiscovery: pendingByLog.get(entry.id),
       details: entry.type === "discovery" ? (entry.details ?? []).map(concealDiscoveryDC) : (entry.details ?? []),
-      displayOutcome: !game.user.isGM && entry.type === "discovery"
-        ? (entry.outcome.includes("Invalid Discovery Skill") ? "Failure" : entry.outcome.startsWith("Critical Success") ? "Critical Success" : entry.outcome.startsWith("Success") ? "Success" : "Failure")
+      displayOutcome: !game.user.isGM && (entry.type === "discovery" || entry.outcome.includes("Invalid Influence Skill"))
+        ? (entry.outcome.includes("Invalid") ? "Failure" : entry.outcome.startsWith("Critical Success") ? "Critical Success" : entry.outcome.startsWith("Success") ? "Success" : "Failure")
         : entry.outcome
     }));
     const npcs = visibleNpcs.map((npc) => ({ ...npc, name: targetDisplayName(npc), active: npc.id === activeNpc?.id,
@@ -3579,19 +3616,22 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
   let options = "";
   let selectableSkills = [];
   if (type === "discovery") {
-    const perception = npc.discovery.find((skill) => skill.slug === "perception");
-    const diplomacy = npc.discovery.find((skill) => skill.slug === "diplomacy");
-    const esoteric = availableSkillsForActor(actor, npc.discovery, npc).find((skill) => skill.slug === "esoteric-lore");
-    const primary = [perception, diplomacy, esoteric].filter(Boolean)
-      .map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
-    selectableSkills = [perception, diplomacy, esoteric].filter(Boolean);
-    const otherSkills = actorSkillChoices(actor).filter((skill) => !["perception", "diplomacy", "esoteric-lore"].includes(skill.slug));
-    const remaining = otherSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
-    options = `${primary}<option disabled>──────────</option>${remaining}`;
+    const knownSkills = knownConfiguredSkills(actor, npc.discovery, npc, "secret");
+    const attempts = speculativeAttemptSkills(actor, npc, knownSkills);
+    selectableSkills = knownSkills;
+    const knownOptions = knownSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
+    const attemptOptions = attempts.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
+    options = `${knownOptions}${knownOptions && attemptOptions ? '<option disabled>──────────</option>' : ""}${attemptOptions}`;
   } else {
-    selectableSkills = availableSkillsForActor(actor, npc.influence, npc);
-    if (!selectableSkills.length) return ui.notifications.warn(`${actor.name} has none of the configured ${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : "Influence"} checks.`);
-    options = selectableSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
+    const knownSkills = type === "influence" ? knownConfiguredSkills(actor, npc.influence, npc, "known") : availableSkillsForActor(actor, npc.influence, npc);
+    const attempts = type === "influence" ? speculativeAttemptSkills(actor, npc, knownSkills) : [];
+    selectableSkills = knownSkills;
+    if (!knownSkills.length && !attempts.length) return ui.notifications.warn(`${actor.name} has no trained ${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : "Influence"} checks.`);
+    const knownOptions = knownSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
+    const attemptOptions = attempts.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
+    options = type === "influence"
+      ? `${knownOptions}${knownOptions && attemptOptions ? '<option disabled>──────────</option>' : ""}${attemptOptions}`
+      : knownOptions;
   }
   new Dialog({
     title: `Make a Check: ${npcName}`,
@@ -3599,7 +3639,7 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
     buttons: { request: { icon: '<i class="fas fa-paper-plane"></i>', label: "Request Check", callback: (html) => {
       const selection = String(html.find('[name="skill"]').val());
       const [source, value] = selection.split(":");
-      const actorChoice = source === "actor" ? actorSkillChoices(actor).find((skill) => skill.slug === value) : null;
+      const actorChoice = source === "actor" ? trainedAttemptSkills(actor, npc).find((skill) => skill.slug === value) : null;
       const configuredChoice = source === "configured" ? selectableSkills.find((skill) => skill.id === value) : null;
       const payload = { action: "check-request", encounterId: encounter.id, npcId: npc.id, requesterId: game.user.id, actorId: actor.id, type,
         skillId: source === "configured" ? value : null, skillSlug: actorChoice?.slug ?? null, skillLabel: actorChoice?.label ?? null, diverseLore: !!configuredChoice?.diverseLore };
@@ -3715,6 +3755,11 @@ async function adjudicate(request) {
     skill = { id: `attempt:${request.skillSlug}`, slug: request.skillSlug, label: request.skillLabel ?? request.skillSlug,
       dc: Number(secret?.dc ?? list[0]?.dc ?? 20), invalidDiscovery: true };
   }
+  if (!skill && request.type === "influence") {
+    const fallback = list[0];
+    skill = { id: `attempt:${request.skillSlug}`, slug: request.skillSlug, label: request.skillLabel ?? request.skillSlug,
+      dc: Number(fallback?.dc ?? 20), invalidInfluence: true };
+  }
   if (!skill) return cancelPendingCheck(encounter.id, request.id, "The requested skill is no longer available.");
   if (skill.slug === "esoteric-lore") {
     const state = esotericLoreState(actor, npc);
@@ -3736,7 +3781,11 @@ async function adjudicate(request) {
   ].filter((modifier) => modifier.id.startsWith("boon:") || modifier.description || Number(modifier.value));
   const customMods = [];
   const rows = mods.map((m) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${m.id}" ${(m.enforced || (m.id.startsWith("boon:") && m.activation === "automatic")) ? "checked" : ""} ${m.enforced ? "disabled" : ""}> <strong>${esc(m.label)}</strong> ${signed(Number(m.value))} <small>${esc(m.description ?? "")}</small></label>`).join("");
-  const invalidNotice = skill.invalidDiscovery ? `<p class="hint"><strong>GM:</strong> This is not a valid Discovery skill for this encounter. The blind roll consumes the character's action but cannot grant a Discovery.</p>` : "";
+  const invalidNotice = skill.invalidDiscovery
+    ? `<p class="hint"><strong>GM:</strong> This is not a valid Discovery skill for this encounter. The blind roll consumes the character's action but cannot grant a Discovery.</p>`
+    : skill.invalidInfluence
+      ? `<p class="hint"><strong>GM:</strong> This is not a configured Influence skill for this target. The roll consumes the character's action and resolves as a failure.</p>`
+      : "";
   const content = `<form class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></form>`;
   const adjudicationContent = request.type === "research" ? content.replace(" influences ", " researches ") : request.type === "chase" ? content.replace(" influences ", " attempts ") : request.type === "skill" ? content.replace(" influences ", " tackles ") : content;
   adjudicationOpen = true;
@@ -3879,6 +3928,16 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   }
   const npc = encounter.npcs.find((entry) => entry.id === request.npcId) ?? encounter.npcs[0];
   if (!npc) return ui.notifications.error("The influence target is no longer available.");
+  // Adjudication may have been opened from a slightly older encounter copy.
+  // Rebind valid configured skills to this freshly loaded record so discoveries
+  // and known Influence skills mutate the version that Store.save persists.
+  if (!skill.invalidDiscovery && !skill.invalidInfluence) {
+    const currentSkills = request.type === "discovery" ? npc.discovery : npc.influence;
+    const currentSkill = request.skillId
+      ? currentSkills.find((entry) => entry.id === request.skillId)
+      : currentSkills.find((entry) => entry.slug === request.skillSlug);
+    if (currentSkill) skill = currentSkill;
+  }
   const actorName = participantDisplayName(encounter, actor);
   const npcName = targetDisplayName(npc);
   const statistic = skillStatistic(actor, skill.slug, skill.label);
@@ -3902,7 +3961,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     createMessage: true
   });
   if (!roll) return;
-  const degree = Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
+  const degree = skill.invalidInfluence ? 1 : Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
   const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
   const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
   const points = request.type === "research"
@@ -3916,9 +3975,16 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   snapshot(encounter, `${actorName} → ${npcName}: ${skill.label}`);
   encounter.checkLog ??= [];
   const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: npc.id, npcName, type: request.type,
-    skillLabel: skill.label, outcome: skill.invalidDiscovery ? `${outcome} — Invalid Discovery Skill` : outcome,
+    skillLabel: skill.label, outcome: skill.invalidDiscovery ? `${outcome} — Invalid Discovery Skill` : skill.invalidInfluence ? `${outcome} — Invalid Influence Skill` : outcome,
     phase: encounter.currentPhase, timestamp: Date.now(), detailLabel: "", details: [] };
   encounter.checkLog.push(logEntry);
+  // A successful attempt proves this configured secret Discovery skill works,
+  // so promote it to the public Discovery list for every participant.
+  if (request.type === "discovery" && skill.secret && !skill.invalidDiscovery && degree >= 2) {
+    skill.secret = false;
+    logEntry.details.push(`Revealed Discovery Skill — ${skill.label}.`);
+  }
+  if (request.type === "influence" && !skill.invalidInfluence && degree >= 2) skill.known = true;
   if (request.type === "discovery" && !skill.invalidDiscovery && degree >= 2) {
     encounter.pendingDiscoveries ??= [];
     encounter.pendingDiscoveries.push({ id: randomID(), logEntryId: logEntry.id, userId: request.requesterId, actorId: actor.id, npcId: npc.id, choices: degree === 3 ? 2 : 1 });
@@ -4112,8 +4178,8 @@ async function resolveDiscovery(encounterId, userId, selections, logEntryId) {
     const { choice, named } = selection;
     let fact = "";
     if (choice === "secret") { fact = secret ? `Secret Discovery Skill — ${secret.label}` : "No secret Discovery skill is configured."; discoveryRecord.secretSkill = !!secret; }
-    if (choice === "low") fact = low ? `Lowest non-Lore DC — ${low.label}` : "No non-Lore Influence skill is configured.";
-    if (choice === "high") fact = high ? `Highest non-Lore DC — ${high.label}` : "No non-Lore Influence skill is configured.";
+    if (choice === "low") { fact = low ? `Lowest non-Lore DC — ${low.label}` : "No non-Lore Influence skill is configured."; if (low) low.known = true; }
+    if (choice === "high") { fact = high ? `Highest non-Lore DC — ${high.label}` : "No non-Lore Influence skill is configured."; if (high) high.known = true; }
     if (choice === "weakness") fact = `${npc.weakness.label}: ${npc.weakness.description}`;
     if (choice === "strength") fact = `${npc.strength.label}: ${npc.strength.description}`;
     if (choice === "skill") {
@@ -4121,6 +4187,7 @@ async function resolveDiscovery(encounterId, userId, selections, logEntryId) {
       const askedLabel = askedSkill ? game.i18n.localize(askedSkill.label) : named;
       const found = npc.influence.find((s) => s.slug === named);
       fact = found ? `${found.label} can influence ${npcName}.` : `${askedLabel} is not among ${npcName}'s listed Influence skills.`;
+      if (found) found.known = true;
     }
     discoveryRecord.facts.push(fact);
     learned.push(fact);
@@ -4253,6 +4320,16 @@ function markInfluenceChatMessage(message, html) {
 Hooks.on("renderChatMessage", markInfluenceChatMessage);
 Hooks.on("renderChatMessageHTML", markInfluenceChatMessage);
 Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); });
+
+// A socket notification can arrive before Foundry has synchronized a changed
+// world setting to another client. Refresh from the Setting update itself so
+// player pickers use the saved encounter data, not a just-stale local copy.
+Hooks.on("updateSetting", (setting) => {
+  if (setting.namespace !== MODULE_ID || ![SETTINGS.encounters, SETTINGS.active].includes(setting.key)) return;
+  renderInfluenceSidebar();
+  tracker?.render(false);
+  renderCinematicHud();
+});
 
 Hooks.on("getSceneControlButtons", (controls) => {
   const tokenTools = controls.tokens?.tools;

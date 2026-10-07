@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 — 2026-10-07
+
+- Reworked player Discovery and Influence pickers: players now propose trained statistics from their own sheet rather than receiving a pre-filtered answer key. Known working skills appear above a divider; other trained skills remain available below it for table adjudication.
+- Treat Perception as a universally rollable PF2e/SF2e statistic even though it is not stored in the ordinary skills collection.
+- A successful configured secret Discovery check now automatically reveals that Discovery skill for future checks. Successful configured Influence checks now similarly promote the skill to the known Influence list.
+- Fixed cross-client state synchronization so a newly revealed Discovery or known Influence skill appears reliably for every player after Foundry receives the updated encounter setting.
+- Invalid unlisted Influence approaches resolve as player-safe failures while still allowing GMs to apply a creative approach manually when appropriate.
+
 ## 0.8.0 — 2026-10-07
 
 - Expanded the SF2e Starship encounter prototype with round-by-round crew role claims, player-owned action selection, GM adjudication, updated Gunner actions and weapon-strike rolls, ship Actor/token art, configurable player-facing ship-stat visibility, named count-up/countdown/points trackers, calculated or GM-decided outcomes, manual ship and tracker adjustments, and player-safe enemy damage states.
