@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 — 2026-10-07
+
+- Turned Beat the Clock Chases into a true timed-escape mode: no pursuit subject, active obstacle progression only, a required round limit, and a Time Expired result if the final obstacle is not cleared in time.
+- Beat the Clock’s GM editor now hides quarry/pursuer-only settings and defaults a blank round limit to three rounds.
+- Added Beat the Clock countdown context to trackers and sidebar, with neutral time-remaining updates and a two-panel cinematic presentation.
+
 ## 0.8.1 — 2026-10-07
 
 - Reworked player Discovery and Influence pickers: players now propose trained statistics from their own sheet rather than receiving a pre-filtered answer key. Known working skills appear above a divider; other trained skills remain available below it for table adjudication.

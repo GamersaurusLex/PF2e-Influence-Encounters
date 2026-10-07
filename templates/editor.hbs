@@ -11,6 +11,7 @@
         <div class="form-group"><label>Canvas Blur</label><div class="form-fields"><input type="number" min="0" max="20" name="backgroundBlur" value="{{encounter.backgroundBlur}}"></div></div>
         {{#if isChase}}
         <label>Overall Chase Description<textarea name="chaseDescription" placeholder="The chase's overall situation, stakes, and setting">{{encounter.chaseDescription}}</textarea></label>
+        {{#unless isBeatClock}}
         <fieldset class="chase-subject-editor"><legend>Persistent Chase Subject</legend>
           <p class="hint">The quarry, pursuer, rival, destination, or objective shown throughout the chase.</p>
           <div class="actor-drop-zone target-link-drop-zone" data-actor-drop="chase-subject"><i class="fa-solid fa-link"></i><strong>Link the chase subject to an Actor</strong><span>Drop an Actor or Token to copy its name and portrait</span></div>
@@ -20,6 +21,9 @@
           <div class="form-group"><label>Nickname</label><div class="form-fields"><input name="chaseSubject.nickname" value="{{encounter.chaseSubject.nickname}}" placeholder="Optional short display name"></div></div>
           <div class="form-group"><label>Subject Image</label><div class="form-fields"><file-picker type="image" name="chaseSubject.image" value="{{encounter.chaseSubject.image}}"></file-picker></div></div>
         </fieldset>
+        {{else}}
+        <p class="hint">Beat the Clock has no chase subject. Clear every obstacle before the round limit expires.</p>
+        {{/unless}}
         {{/if}}
         {{#if isSkill}}<label>Situation and Stakes<textarea name="skillDescription" placeholder="Describe what the party is trying to accomplish and what is at stake.">{{encounter.skillDescription}}</textarea></label>{{/if}}
       </fieldset>
@@ -43,15 +47,21 @@
         <div class="form-group"><label>Research DC Visibility</label><div class="form-fields"><select name="dcVisibility">{{selectOptions dcVisibilities selected=encounter.dcVisibility}}</select></div></div>
         {{else}}{{#if isChase}}
         <div class="form-group"><label>Chase Type</label><div class="form-fields"><select name="chaseType">{{selectOptions chaseTypes selected=encounter.chaseType}}</select></div></div>
-        <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><label>Round Limit</label><input type="number" min="0" name="roundLimit" value="{{encounter.roundLimit}}"></div></div>
+        <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><label>Round Limit</label><input type="number" min="{{#if isBeatClock}}1{{else}}0{{/if}}" name="roundLimit" value="{{encounter.roundLimit}}"></div></div>
         <div class="form-group"><label>Party Balancing</label><div class="form-fields"><label>Designed for</label><input type="number" min="1" name="chaseDesignedPartySize" value="{{encounter.chaseDesignedPartySize}}"><span class="units">PCs</span><button type="button" data-action="rebalanceChase"><i class="fa-solid fa-scale-balanced"></i> Recalculate All CP</button></div></div>
+        {{#unless isBeatClock}}
         <div class="form-group"><label>Subject Starting Obstacle</label><div class="form-fields"><select name="subjectStartPosition">{{selectOptions chasePositionOptions selected=encounter.subjectStartPosition}}</select></div></div>
         <div class="form-group"><label>Current Subject Obstacle</label><div class="form-fields"><select name="opponentPosition">{{selectOptions chasePositionOptions selected=encounter.opponentPosition}}</select></div></div>
         <p class="hint">The starting obstacle is used whenever a draft chase begins or an in-progress chase is duplicated. The current obstacle tracks live progress and can be corrected manually after an undo or other state change.</p>
         <div class="form-group"><label>Subject Pace</label><div class="form-fields"><input type="number" min="0" step="1" name="opponentPace" value="{{encounter.opponentPace}}"><span class="units">obstacle(s) per turn</span></div></div>
         <div class="form-group"><label>Subject Acts</label><div class="form-fields"><select name="subjectTurnOrder">{{selectOptions subjectTurnOrders selected=encounter.subjectTurnOrder}}</select></div></div>
+        {{/unless}}
         <div class="form-group"><label>Obstacle Visibility</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="obscureFutureObstacles" {{checked encounter.obscureFutureObstacles}}> Obscure future obstacles from players</label></div></div>
+        {{#if isBeatClock}}
+        <p class="hint">Players see only completed obstacles and the current obstacle.</p>
+        {{else}}
         <p class="hint">Players see only completed obstacles and the current obstacle. The subject's exact position is replaced by a relative chase update.</p>
+        {{/if}}
         <div class="form-group"><label>Round Flow</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="promptAdvanceWhenAllActed" {{checked encounter.promptAdvanceWhenAllActed}}> Prompt the GM to advance after every participating PC acts</label></div></div>
         <div class="form-group"><label>DC Visibility</label><div class="form-fields"><select name="dcVisibility">{{selectOptions dcVisibilities selected=encounter.dcVisibility}}</select></div></div>
         <label>Victory Outcome<textarea name="victoryText">{{encounter.victoryText}}</textarea></label>
