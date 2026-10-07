@@ -27,7 +27,13 @@
         <div class="form-group"><label>Level</label><div class="form-fields"><input type="number" min="0" max="25" name="level" value="{{encounter.level}}"><button type="button" data-action="dcReference" title="Show PF2e DCs for this level"><i class="fa-solid fa-table-cells"></i> DC Reference</button></div></div>
         {{#if isStarship}}
         <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><span class="units">Open-ended encounter</span></div></div>
-        <div class="form-group"><label>Countdown</label><div class="form-fields"><input type="number" min="0" name="starship.countdown.value" value="{{encounter.starship.countdown.value}}"><label>Limit</label><input type="number" min="1" name="starship.countdown.limit" value="{{encounter.starship.countdown.limit}}"></div></div>
+        <div class="form-group"><label>Tracker Name</label><div class="form-fields"><input type="text" name="starship.countdown.label" value="{{encounter.starship.countdown.label}}" placeholder="Countdown"></div></div>
+        <div class="form-group"><label>Tracking Mode</label><div class="form-fields"><select name="starship.countdown.mode">{{selectOptions starshipClockModes selected=encounter.starship.countdown.mode}}</select></div></div>
+        <div class="form-group"><label>Current Value</label><div class="form-fields"><input type="number" min="0" name="starship.countdown.value" value="{{encounter.starship.countdown.value}}"><label>Limit</label><input type="number" min="1" name="starship.countdown.limit" value="{{encounter.starship.countdown.limit}}"></div></div>
+        <div class="form-group"><label>Victory Resolution</label><div class="form-fields"><select name="starship.victoryMode">{{selectOptions starshipVictoryModes selected=encounter.starship.victoryMode}}</select></div></div>
+        <div class="form-group"><label>PC Ship Stats for Players</label><div class="form-fields"><select name="starship.ships.primorata.playerStats">{{selectOptions starshipShipStatModes selected=encounter.starship.ships.primorata.playerStats}}</select></div></div>
+        <div class="form-group"><label>Enemy Ship Stats for Players</label><div class="form-fields"><select name="starship.ships.heart.playerStats">{{selectOptions starshipShipStatModes selected=encounter.starship.ships.heart.playerStats}}</select></div></div>
+        <p class="hint">Calculated victory: destroy the enemy ship before this tracker reaches its limit. GM Decides keeps the result under your control.</p>
         <p class="hint">Players see only the activity difficulty word. The GM sees the exact DC during adjudication.</p>
         {{else}}
         {{#if isResearch}}
@@ -136,10 +142,10 @@
         {{#each encounter.starship.ships}}
         <fieldset class="npc-editor-card"><legend>{{name}}</legend>
           <input type="hidden" name="starship.ships.{{@key}}.actorId" value="{{actorId}}">
-          <div class="actor-drop-zone target-link-drop-zone" data-actor-drop="starship-ship:{{@key}}"><i class="fa-solid fa-rocket"></i><strong>{{#if actorId}}Replace linked ship Actor{{else}}Link a ship Actor{{/if}}</strong><span>Drop an Actor or Token to copy its name and portrait only</span></div>
+          <div class="actor-drop-zone target-link-drop-zone" data-actor-drop="starship-ship:{{@key}}"><i class="fa-solid fa-rocket"></i><strong>{{#if actorId}}Replace linked ship Actor{{else}}Link a ship Actor{{/if}}</strong><span>Drop an Actor or Token to use its name and token art</span></div>
           <div class="form-group"><label>Actor from Ships folder</label><div class="form-fields"><select data-starship-ship-picker="{{@key}}">{{selectOptions @root.starshipActorChoices selected=actorId}}</select></div></div>
           <div class="form-group"><label>Name</label><div class="form-fields"><input name="starship.ships.{{@key}}.name" value="{{name}}"></div></div>
-          <div class="form-group"><label>Image</label><div class="form-fields"><file-picker type="image" name="starship.ships.{{@key}}.image" value="{{image}}"></file-picker></div></div>
+          {{#if actorId}}<p class="hint">This ship uses the linked Actor’s prototype token art.</p>{{else}}<div class="form-group"><label>Fallback ship icon</label><div class="form-fields"><select name="starship.ships.{{@key}}.image">{{selectOptions @root.starshipFallbackIcons selected=image}}</select></div></div>{{/if}}
           <div class="trait-grid"><label>Hull HP<input type="number" min="0" name="starship.ships.{{@key}}.hp" value="{{hp}}"></label><label>Maximum HP<input type="number" min="1" name="starship.ships.{{@key}}.maxHp" value="{{maxHp}}"></label><label>Shields<input type="number" min="0" name="starship.ships.{{@key}}.shields" value="{{shields}}"></label><label>Shield Refresh<input type="number" min="0" name="starship.ships.{{@key}}.shieldRefresh" value="{{shieldRefresh}}"></label></div>
           <div class="trait-grid"><label>AC<input type="number" min="0" name="starship.ships.{{@key}}.ac" value="{{ac}}"></label><label>Fortitude<input type="number" name="starship.ships.{{@key}}.fortitude" value="{{fortitude}}"></label><label>Reflex<input type="number" name="starship.ships.{{@key}}.reflex" value="{{reflex}}"></label></div>
         </fieldset>

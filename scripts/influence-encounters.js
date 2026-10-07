@@ -2,13 +2,14 @@ const MODULE_ID = "influence-encounters";
 const SOCKET = `module.${MODULE_ID}`;
 const REMOTE_HIGHLIGHT_MODULE_ID = "remote-highlight-ui";
 const REMOTE_HIGHLIGHT_SOCKET = `module.${REMOTE_HIGHLIGHT_MODULE_ID}`;
-const INFLUENCE_SCENE_CONTROL_SELECTOR = "#scene-controls-tools .influence-control";
+const INFLUENCE_SCENE_CONTROL_SELECTOR = '#scene-controls-tools [data-tool="influence-encounter"]';
 const SETTINGS = {
   encounters: "encounters",
   active: "activeEncounter",
   folders: "encounterFolders",
   selections: "userSelections",
-  highlightOnActivation: "highlightOnActivation"
+  highlightOnActivation: "highlightOnActivation",
+  showProgressClocks: "showProgressClocks"
 };
 const { Application, Dialog } = foundry.appv1.api;
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
@@ -27,6 +28,14 @@ const PF2E_SKILLS = [
 const PF2E_SAVES = ["Fortitude Save", "Reflex Save", "Will Save"];
 const PF2E_SAVE_SLUGS = { "fortitude save": "fortitude", "reflex save": "reflex", "will save": "will" };
 const SF2E_SKILLS = ["Computers", "Piloting"];
+const STARSHIP_FALLBACK_ICONS = {
+  [`modules/${MODULE_ID}/assets/starship-icons/interceptor.svg`]: "Interceptor",
+  [`modules/${MODULE_ID}/assets/starship-icons/freighter.svg`]: "Freighter",
+  [`modules/${MODULE_ID}/assets/starship-icons/cruiser.svg`]: "Cruiser",
+  [`modules/${MODULE_ID}/assets/starship-icons/station.svg`]: "Station",
+  [`modules/${MODULE_ID}/assets/starship-icons/anomaly.svg`]: "Cosmic anomaly",
+  [`modules/${MODULE_ID}/assets/starship-icons/hostile.svg`]: "Hostile vessel"
+};
 
 const PF2E_LORE_SKILLS = [
   "Academia Lore", "Accounting Lore", "Architecture Lore", "Art Lore", "Astronomy Lore", "Carpentry Lore",
@@ -74,15 +83,25 @@ function starshipActivity(id, label, skills, dc, description, options = {}) {
   return { id, label, skills, dc, description, allowLore, ...extra };
 }
 
+const STARSHIP_GUNNER_ACTIONS = [
+  starshipActivity("plasma-battery", "Plasma Salvo", ["simple-ranged"], 21, "On a hit, deal 2d8+8 fire damage. The dependable damage option.", { difficulty: "Easy", damage: "2d8+8", damageType: "fire", target: "heart" }),
+  starshipActivity("shieldbreaker", "Shieldbreaker Missile", ["simple-ranged"], 23, "On a hit, deal 2d6+6 electricity damage, ignoring the Heart’s current shields. On a critical hit, also prevent its next shield restoration.", { difficulty: "Average", damage: "2d6+6", damageType: "electricity", target: "heart", ignoresShields: true }),
+  starshipActivity("suppress", "Suppress Emitter", ["simple-ranged"], 23, "On a hit, deal 2d6+6 fire damage and reduce the next Heart pulse’s damage to the Primorata by 8 after the save. A critical hit increases that reduction to 16.", { difficulty: "Average", damage: "2d6+6", damageType: "fire", target: "heart" }),
+  starshipActivity("called-core", "Called Core Shot", ["simple-ranged"], 27, "On a hit, deal 2d10+10 fire damage, ignoring the Heart’s current shields.", { difficulty: "Hard", damage: "2d10+10", damageType: "fire", target: "heart", ignoresShields: true })
+];
+
 function defaultStarshipData() {
   return {
     stage: "role-selection",
+    gunnerProfileVersion: 2,
     roleSelections: {},
     actionSelections: {},
-    countdown: { value: 0, limit: 7 },
+    countdown: { label: "Countdown", mode: "countup", value: 0, limit: 7 },
+    victoryMode: "calculated",
+    outcome: "",
     ships: {
-      primorata: { actorId: "", name: "Primorata", image: "icons/svg/wing.svg", hp: 95, maxHp: 95, shields: 9, shieldRefresh: 9, ac: 24, fortitude: 14, reflex: 17 },
-      heart: { actorId: "", name: "The Heart", image: "icons/svg/target.svg", hp: 85, maxHp: 85, shields: 5, shieldRefresh: 5, ac: 21, fortitude: 0, reflex: 0, fireWeakness: 5 }
+      primorata: { actorId: "", name: "Primorata", image: `modules/${MODULE_ID}/assets/starship-icons/interceptor.svg`, playerStats: "explicit", hp: 95, maxHp: 95, shields: 9, shieldRefresh: 9, ac: 24, fortitude: 14, reflex: 17 },
+      heart: { actorId: "", name: "The Heart", image: `modules/${MODULE_ID}/assets/starship-icons/anomaly.svg`, playerStats: "vague", hp: 85, maxHp: 85, shields: 5, shieldRefresh: 5, ac: 21, fortitude: 0, reflex: 0, fireWeakness: 5 }
     },
     modifiers: [
       { id: "attack-run", label: "Attack Run", value: 1, type: "circumstance", description: "Pilot-created opening; set the final value for its degree of success." },
@@ -110,10 +129,7 @@ function defaultStarshipData() {
         starshipActivity("boost-systems", "Boost Systems", ["crafting"], 22, "Improve the pilot or science officer's next check.")
       ] },
       { id: "gunner", label: "Gunner", capacity: 2, activities: [
-        starshipActivity("plasma-battery", "Plasma Battery", ["simple-ranged"], 21, "Fire the Primorata's plasma battery.", { damage: "2d8+8", damageType: "fire", target: "heart" }),
-        starshipActivity("shieldbreaker", "Shieldbreaker", ["simple-ranged"], 21, "Fire a shield-piercing electrical salvo.", { damage: "2d6+6", damageType: "electricity", target: "heart", ignoresShields: true }),
-        starshipActivity("suppress", "Suppress", ["simple-ranged"], 21, "Suppress the Heart's next pulse.", { damage: "2d6+6", damageType: "fire", target: "heart" }),
-        starshipActivity("called-core", "Called Shot: Core", ["simple-ranged"], 24, "Fire directly at the exposed core.", { damage: "2d10+10", damageType: "fire", target: "heart", ignoresShields: true })
+        ...deepClone(STARSHIP_GUNNER_ACTIONS)
       ] },
       { id: "science", label: "Science Officer", capacity: 1, activities: [
         starshipActivity("analyze-fracture", "Analyze Fracture", ["computers", "crafting"], 22, "Analyze the Heart's defenses.", { allowLore: true }),
@@ -129,6 +145,17 @@ function defaultStarshipData() {
       ] }
     ]
   };
+}
+
+function migrateStarshipGunnerActions(starship, force = false) {
+  if (!force && Number(starship.gunnerProfileVersion) >= 2) return;
+  const gunner = starship.roles.find((role) => role.id === "gunner");
+  if (!gunner) return;
+  const replacements = new Map(STARSHIP_GUNNER_ACTIONS.map((activity) => [activity.id, activity]));
+  gunner.activities = gunner.activities.map((activity) => replacements.has(activity.id)
+    ? { ...activity, ...deepClone(replacements.get(activity.id)) }
+    : activity);
+  starship.gunnerProfileVersion = 2;
 }
 
 function starshipDifficulty(dc, level) {
@@ -162,10 +189,78 @@ function starshipActivityChoices(actor, activity) {
   // the narrative fit during the normal adjudication step.
   const allowed = choices.filter((skill) => activity.skills.includes(skill.slug) || (!activity.skills.includes("simple-ranged") && skill.lore));
   if (activity.skills.includes("simple-ranged")) {
-    const statistic = actor.getStatistic?.("simple-ranged");
-    return statistic?.roll ? [{ slug: "simple-ranged", label: "Simple Ranged Weapons", lore: false, rank: Number(statistic.rank) || 1 }] : [];
+    return starshipSimpleRangedStatistic(actor)
+      ? [{ slug: "simple-ranged", label: "Simple Ranged Weapons", lore: false, rank: Number(actor.system?.proficiencies?.attacks?.simple?.rank) || 0 }]
+      : [];
   }
   return allowed;
+}
+
+function starshipSimpleRangedStatistic(actor) {
+  if (!actor || !game.pf2e?.Check || !game.pf2e?.CheckModifier || !game.pf2e?.Modifier) return null;
+  const rank = Math.max(0, Number(actor.system?.proficiencies?.attacks?.simple?.rank) || 0);
+  const level = Math.max(0, Number(actor.level ?? actor.system?.details?.level?.value) || 0);
+  const dexterity = Number(actor.system?.abilities?.dex?.mod) || 0;
+  const proficiency = rank ? level + (rank * 2) : 0;
+  const modifiers = [
+    new game.pf2e.Modifier({ slug: "starship-dexterity", label: "Dexterity", modifier: dexterity, type: "ability" }),
+    new game.pf2e.Modifier({ slug: "starship-simple-proficiency", label: "Simple Weapons Proficiency", modifier: proficiency, type: "proficiency" })
+  ];
+  return {
+    rank,
+    mod: dexterity + proficiency,
+    async roll(options = {}) {
+      const check = new game.pf2e.CheckModifier("simple-ranged", { modifiers }, options.modifiers ?? []);
+      return game.pf2e.Check.roll(check, {
+        ...options,
+        actor,
+        type: "attack-roll",
+        title: options.label ?? "Starship Gunnery"
+      });
+    }
+  };
+}
+
+function starshipShipPortrait(ship) {
+  const actor = game.actors.get(ship?.actorId);
+  return actor ? participantPortrait(actor) : ship?.image || Object.keys(STARSHIP_FALLBACK_ICONS)[0];
+}
+
+function starshipShipContext(ship) {
+  const playerStats = game.user.isGM ? "explicit" : ship.playerStats;
+  return {
+    ...ship,
+    image: starshipShipPortrait(ship),
+    hullStatus: shipHullStatus(ship),
+    showHullStatus: playerStats !== "hidden",
+    showExplicitStats: playerStats === "explicit"
+  };
+}
+
+function starshipClockReached(clock = {}) {
+  const value = Math.max(0, Number(clock.value) || 0);
+  const limit = Math.max(1, Number(clock.limit) || 1);
+  return clock.mode === "countdown" ? value <= 0 : value >= limit;
+}
+
+function starshipClockDisplay(clock = {}) {
+  const value = Math.max(0, Number(clock.value) || 0);
+  const limit = Math.max(1, Number(clock.limit) || 1);
+  return clock.mode === "points" ? String(value) : `${value} / ${limit}`;
+}
+
+function starshipCalculatedOutcome(encounter) {
+  const starship = encounter?.starship;
+  if (!starship || starship.victoryMode !== "calculated") return starship?.outcome || "";
+  if (Number(starship.ships?.heart?.hp) <= 0) return "victory";
+  if (Number(starship.ships?.primorata?.hp) <= 0 || starshipClockReached(starship.countdown)) return "failure";
+  return "";
+}
+
+function updateStarshipCalculatedOutcome(encounter) {
+  if (encounter?.starship?.victoryMode !== "calculated") return encounter?.starship?.outcome || "";
+  encounter.starship.outcome = starshipCalculatedOutcome(encounter);
+  return encounter.starship.outcome;
 }
 
 function starshipTrackerContext(encounter) {
@@ -180,29 +275,50 @@ function starshipTrackerContext(encounter) {
     const assignments = participants.filter((actor) => starship.roleSelections[actor.id] === role.id)
       .map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor) }));
     const selected = starship.roleSelections[selectedActor?.id] === role.id;
-    return { ...role, assignments, openSeats: Math.max(0, Number(role.capacity) - assignments.length), selected, claimDisabled: !selected && assignments.length >= Number(role.capacity) };
+    const full = assignments.length >= Number(role.capacity);
+    return {
+      ...role,
+      assignments,
+      openSeats: Math.max(0, Number(role.capacity) - assignments.length),
+      selected,
+      claimDisabled: !selected && full,
+      showClaim: !!selectedActor && !selected && !full,
+      showUnclaim: !!selectedActor && selected,
+      claimed: !!selectedActor && !selected && full
+    };
   });
   const selectedRoleId = starship.roleSelections[selectedActor?.id] ?? "";
   const selectedRole = starshipRole(encounter, selectedRoleId);
-  const selectedActionId = starship.actionSelections[selectedActor?.id]?.activityId ?? "";
-  const selectedSkillSlug = starship.actionSelections[selectedActor?.id]?.skillSlug ?? "";
+  const sharedAction = starship.actionSelections[selectedActor?.id] ?? {};
+  // A player chooses an activity locally first, then the GM persists it over
+  // the socket. Keeping this tiny bit of client state makes the action card
+  // expand immediately instead of looking like its button did nothing.
+  const localAction = !game.user.isGM && selection.starshipRound === Number(encounter.currentRound)
+    ? { activityId: selection.starshipActionId, skillSlug: selection.starshipSkillSlug }
+    : {};
+  const selectedActionId = localAction.activityId || sharedAction.activityId || "";
+  const selectedSkillSlug = localAction.activityId ? localAction.skillSlug : sharedAction.skillSlug ?? "";
   const activities = (selectedRole?.activities ?? []).map((activity) => ({
     ...activity,
     selected: activity.id === selectedActionId,
-    difficulty: starshipDifficulty(activity.dc, encounter.level),
+    difficulty: activity.difficulty ?? starshipDifficulty(activity.dc, encounter.level),
     choices: starshipActivityChoices(selectedActor, activity).map((skill) => ({ ...skill, selected: skill.slug === selectedSkillSlug }))
   }));
-  const roleSelectionComplete = participants.length > 0 && participants.every((actor) => !!starship.roleSelections[actor.id]);
-  const finished = Object.values(starship.ships).some((ship) => Number(ship.hp) <= 0) || starship.countdown.value >= starship.countdown.limit;
+  const roleSelectionComplete = participants.length > 0 && participants.every((actor) =>
+    starship.roles.some((role) => starship.roleSelections[actor.id] === role.id)
+  );
+  const starshipOutcome = starshipCalculatedOutcome(encounter);
+  const clock = { ...starship.countdown, display: starshipClockDisplay(starship.countdown) };
+  const finished = !!starshipOutcome;
   const pendingChecks = game.user.isGM ? (encounter.pendingChecks ?? []).map((request, index) => {
     const actor = game.actors.get(request.actorId);
     const activity = starshipActivityFor(encounter, request.roleId, request.activityId);
     return { ...request, position: index + 1, actorName: actor ? participantDisplayName(encounter, actor) : "Missing PC", npcName: starship.ships.heart.name, skillLabel: request.skillLabel ?? "Unknown statistic", activityLabel: activity?.label ?? "Starship action" };
   }) : [];
   return {
-    encounter, starship, isStarship: true, isGM: game.user.isGM, noEncounter: false, isPaused: encounter.status === "paused",
-    primorata: { ...starship.ships.primorata, hullStatus: shipHullStatus(starship.ships.primorata) },
-    heart: { ...starship.ships.heart, hullStatus: shipHullStatus(starship.ships.heart) },
+    encounter, starship: { ...starship, countdown: clock, outcome: starshipOutcome }, starshipOutcome, isStarship: true, isGM: game.user.isGM, noEncounter: false, isPaused: encounter.status === "paused",
+    primorata: starshipShipContext(starship.ships.primorata),
+    heart: starshipShipContext(starship.ships.heart),
     actors: participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter.actorsActed?.[actor.id], roleLabel: starshipRole(encounter, starship.roleSelections[actor.id])?.label ?? "Unassigned" })),
     checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry, typeLabel: entry.type === "starship" ? "Crew Action" : entry.type, displayOutcome: entry.outcome })),
     controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, finished, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
@@ -210,7 +326,8 @@ function starshipTrackerContext(encounter) {
     canStartStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "role-selection" && !finished,
     canTakeStarshipAction: encounter.status === "active" && starship.stage === "actions" && !!selectedActor && !!selectedRole && !!selectedActionId && !!selectedSkillSlug && !encounter.actorsActed?.[selectedActor.id] && !finished,
     canNextStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "actions" && !encounter.pendingChecks?.length && !finished,
-    canPause: game.user.isGM && encounter.status === "active", canResume: game.user.isGM && encounter.status === "paused", canOpenForPlayers: game.user.isGM && encounter.status === "active"
+    canPause: game.user.isGM && encounter.status === "active", canResume: game.user.isGM && encounter.status === "paused", canOpenForPlayers: game.user.isGM && encounter.status === "active",
+    canDeclareStarshipOutcome: game.user.isGM && encounter.status === "active" && starship.victoryMode === "gm" && !starshipOutcome
   };
 }
 
@@ -418,15 +535,26 @@ function isGeneratedPlaceholderNpc(encounter, npc) {
 function normalizeEncounterCollections(encounter) {
   encounter.subsystemType = ["influence", "research", "chase", "skill", "starship"].includes(encounter.subsystemType) ? encounter.subsystemType : "influence";
   if (encounter.subsystemType === "starship") {
+    const savedGunnerActivities = indexedArray(encounter.starship?.roles).find((role) => role.id === "gunner")?.activities;
+    const migrateLegacyGunnerActions = indexedArray(savedGunnerActivities).some((activity) => ["Plasma Battery", "Shieldbreaker", "Suppress", "Called Shot: Core"].includes(activity.label))
+      || indexedArray(savedGunnerActivities).some((activity) => STARSHIP_GUNNER_ACTIONS.some((replacement) => replacement.id === activity.id) && !activity.difficulty);
     const defaults = defaultStarshipData();
     encounter.starship = foundry.utils.mergeObject(defaults, encounter.starship ?? {}, { inplace: false, overwrite: true });
     encounter.starship.stage = ["role-selection", "actions"].includes(encounter.starship.stage) ? encounter.starship.stage : "role-selection";
     encounter.starship.roleSelections = encounter.starship.roleSelections && typeof encounter.starship.roleSelections === "object" ? encounter.starship.roleSelections : {};
     encounter.starship.actionSelections = encounter.starship.actionSelections && typeof encounter.starship.actionSelections === "object" ? encounter.starship.actionSelections : {};
+    // FormData expands indexed inputs into objects; runtime code expects arrays.
+    encounter.starship.roles = indexedArray(encounter.starship.roles);
+    encounter.starship.modifiers = indexedArray(encounter.starship.modifiers);
     encounter.starship.countdown.value = Math.max(0, Number(encounter.starship.countdown.value) || 0);
     encounter.starship.countdown.limit = Math.max(1, Number(encounter.starship.countdown.limit) || 7);
+    encounter.starship.countdown.label = String(encounter.starship.countdown.label || "Countdown").trim() || "Countdown";
+    encounter.starship.countdown.mode = ["countup", "countdown", "points"].includes(encounter.starship.countdown.mode) ? encounter.starship.countdown.mode : "countup";
+    encounter.starship.victoryMode = encounter.starship.victoryMode === "gm" ? "gm" : "calculated";
+    encounter.starship.outcome = ["victory", "failure"].includes(encounter.starship.outcome) ? encounter.starship.outcome : "";
     for (const ship of Object.values(encounter.starship.ships)) {
       ship.actorId ||= "";
+      ship.playerStats = ["explicit", "vague", "hidden"].includes(ship.playerStats) ? ship.playerStats : "vague";
       ship.maxHp = Math.max(1, Number(ship.maxHp) || 1);
       ship.hp = Math.max(0, Math.min(ship.maxHp, Number(ship.hp) || 0));
       ship.shields = Math.max(0, Number(ship.shields) || 0);
@@ -441,6 +569,7 @@ function normalizeEncounterCollections(encounter) {
         activity.allowLore = !!activity.allowLore;
       }
     }
+    migrateStarshipGunnerActions(encounter.starship, migrateLegacyGunnerActions);
   }
   encounter.chaseType = ["chase-down", "run-away", "beat-clock", "competitive", "custom"].includes(encounter.chaseType) ? encounter.chaseType : "chase-down";
   encounter.currentRound = Math.max(1, Number(encounter.currentRound) || 1);
@@ -957,6 +1086,15 @@ function progressClockDatabase() {
   return database?.get && database?.addClock && database?.update && database?.delete ? database : null;
 }
 
+function applyProgressClockVisibility() {
+  document.getElementById(`${MODULE_ID}-clock-visibility`)?.remove();
+  if (game.settings.get(MODULE_ID, SETTINGS.showProgressClocks)) return;
+  const style = document.createElement("style");
+  style.id = `${MODULE_ID}-clock-visibility`;
+  style.textContent = "#clock-panel { display: none !important; }";
+  document.head.append(style);
+}
+
 function reportProgressClockError(error) {
   console.warn(`${MODULE_ID} | Global Progress Clocks integration failed; encounter data was still saved.`, error);
   if (progressClockWarningShown) return;
@@ -1313,11 +1451,11 @@ function openEncounterForParticipants(encounter) {
 }
 
 function encounterViewSelection(encounter) {
-  if (!encounter) return { actorId: "", npcId: "" };
+  if (!encounter) return { actorId: "", npcId: "", starshipActionId: "", starshipSkillSlug: "", starshipRound: 0 };
   if (game.user.isGM) {
     const visibleNpcs = encounter.npcs.filter((npc) => npc.availability !== "hidden");
     const npcId = visibleNpcs.some((npc) => npc.id === encounter.activeNpcId) ? encounter.activeNpcId : visibleNpcs[0]?.id ?? "";
-    return { actorId: encounter.activeActorId ?? "", npcId };
+    return { actorId: encounter.activeActorId ?? "", npcId, starshipActionId: "", starshipSkillSlug: "", starshipRound: 0 };
   }
   const participants = encounterParticipants(encounter);
   const owned = participants.filter((actor) => canUserControlActor(actor));
@@ -1333,7 +1471,12 @@ function encounterViewSelection(encounter) {
     : selectableNpcs.some((npc) => npc.id === saved.npcId)
     ? saved.npcId
     : selectableNpcs.some((npc) => npc.id === encounter.activeNpcId) ? encounter.activeNpcId : selectableNpcs[0]?.id ?? "";
-  return { actorId, npcId };
+  return {
+    actorId, npcId,
+    starshipActionId: String(saved.starshipActionId ?? ""),
+    starshipSkillSlug: String(saved.starshipSkillSlug ?? ""),
+    starshipRound: Number(saved.starshipRound) || 0
+  };
 }
 
 async function setEncounterViewSelection(encounter, changes) {
@@ -1453,16 +1596,28 @@ async function chooseLoreSpecialization(category) {
 
 class InfluenceTracker extends Application {
   constructor(options = {}) { super(options); }
+  get template() {
+    return Store.get()?.subsystemType === "starship"
+      ? `modules/${MODULE_ID}/templates/starship-tracker.hbs`
+      : this.options.template;
+  }
   static get defaultOptions() {
     return foundry.utils.mergeObject(super.defaultOptions, {
-      id: "influence-encounter-tracker", title: "Influence Encounter", template: `modules/${MODULE_ID}/templates/tracker.hbs`,
-      width: 640, height: "auto", resizable: true, classes: [MODULE_ID],
+      id: "influence-encounter-tracker",
+      title: "Influence Encounter",
+      template: `modules/${MODULE_ID}/templates/tracker.hbs`,
+      width: 640,
+      height: "auto",
+      resizable: true,
+      classes: [MODULE_ID],
       tabs: [{ navSelector: ".tracker-tabs", contentSelector: ".tracker-content", initial: "encounter" }]
     });
   }
   getData() {
     const encounter = Store.get();
-    if (encounter?.subsystemType === "starship") return starshipTrackerContext(encounter);
+    if (encounter?.subsystemType === "starship") {
+      return starshipTrackerContext(encounter);
+    }
     const isResearch = encounter?.subsystemType === "research";
     const isChase = encounter?.subsystemType === "chase";
     const isSkill = encounter?.subsystemType === "skill";
@@ -1564,6 +1719,10 @@ class InfluenceTracker extends Application {
         const actorId = encounterViewSelection(encounter).actorId;
         return requestStarshipRole(encounter, actorId, event.currentTarget.dataset.roleId);
       }
+      if (action === "unclaim-starship-role") {
+        const actorId = encounterViewSelection(encounter).actorId;
+        return requestStarshipRole(encounter, actorId, event.currentTarget.dataset.roleId, { unclaim: true });
+      }
       if (action === "select-starship-action") {
         const actorId = encounterViewSelection(encounter).actorId;
         return setStarshipActionSelection(encounter, actorId, event.currentTarget.dataset.activityId);
@@ -1574,6 +1733,7 @@ class InfluenceTracker extends Application {
       if (action === "start-starship-round") return startStarshipRound(encounter.id);
       if (action === "next-starship-round") return nextStarshipRound(encounter.id);
       if (action === "starship-adjust") return adjustStarshipValue(encounter.id, event.currentTarget.dataset.path, Number(event.currentTarget.dataset.delta));
+      if (action === "declare-starship-outcome") return declareStarshipOutcome(encounter.id, event.currentTarget.dataset.outcome);
     }
     if (action === "select-participant") {
       const actorId = event.currentTarget.dataset.actorId;
@@ -1582,6 +1742,7 @@ class InfluenceTracker extends Application {
       if (game.user.isGM) {
         encounter.activeActorId = actorId;
         await Store.save(encounter);
+        this.render(true);
       } else {
         await setEncounterViewSelection(encounter, { actorId });
         this.render(false);
@@ -1837,64 +1998,105 @@ function triggerVictorySplash(encounter) {
   if (game.user.isGM) game.socket.emit(SOCKET, { action: "victory-splash", encounterId: encounter.id });
 }
 
-function activateInfluenceSidebar() {
-  const sidebar = document.getElementById("sidebar");
-  if (!sidebar) return;
-  sidebar.querySelectorAll("#sidebar-tabs [data-tab]").forEach((button) => {
-    const active = button.dataset.tab === "influence-encounters";
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  sidebar.querySelectorAll("#sidebar-content > .tab").forEach((section) => {
-    const active = section.id === "influence-encounters-sidebar";
-    section.classList.toggle("active", active);
-    if (active) section.hidden = false;
-  });
-  document.getElementById("sidebar-content")?.classList.add("active-influence-encounters", "expanded");
+class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.sidebar.AbstractSidebarTab) {
+  static tabName = "influenceEncounters";
+  static DEFAULT_OPTIONS = {
+    classes: [MODULE_ID, "influence-sidebar"],
+    actions: {
+      "new-encounter": (event, target) => handleSidebarAction({ currentTarget: target }),
+      "new-folder": (event, target) => handleSidebarAction({ currentTarget: target }),
+      "clear-search": (event, target) => handleSidebarAction({ currentTarget: target }),
+      "open-encounter": (event, target) => handleSidebarAction({ currentTarget: target })
+    },
+    window: {
+      title: "Influence Encounter",
+      icon: "fa-solid fa-comments",
+      resizable: true
+    }
+  };
+  static PARTS = {
+    sidebar: { template: `modules/${MODULE_ID}/templates/sidebar.hbs`, root: true, scrollable: [".influence-sidebar-content"] }
+  };
+
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
+    const sidebar = renderInfluenceSidebarContent();
+    return { ...context, content: sidebar.html, isGM: game.user.isGM, isDirectory: sidebar.directory };
+  }
+
+  async _onRender(context, options) {
+    await super._onRender(context, options);
+    this._sidebarAbort?.abort();
+    this._sidebarAbort = new AbortController();
+    const { signal } = this._sidebarAbort;
+    const panel = this.element.querySelector(".influence-sidebar-content");
+    if (!panel) return;
+    if (game.user.isGM) activateEncounterDirectoryListeners(panel, signal);
+  }
+
+  async _onFirstRender(context, options) {
+    await super._onFirstRender(context, options);
+    if (game.user.isGM) this._createContextMenu(this._getEncounterContextOptions, ".influence-sidebar-encounter", { fixed: true });
+  }
+
+  _getEncounterContextOptions() {
+    const getEncounter = (li) => Store.get(li.closest("[data-entry-id]")?.dataset.entryId);
+    return [{
+      label: "Edit",
+      icon: "fa-solid fa-pen",
+      onClick: (_event, li) => new EncounterEditor(getEncounter(li)).render({ force: true })
+    }, {
+      label: "Resume",
+      icon: "fa-solid fa-play",
+      visible: (li) => getEncounter(li)?.status === "paused",
+      onClick: (_event, li) => resumeEncounter(getEncounter(li).id)
+    }, {
+      label: "Pause",
+      icon: "fa-solid fa-pause",
+      visible: (li) => {
+        const encounter = getEncounter(li);
+        return encounter?.status === "active" && encounter.id === Store.activeId();
+      },
+      onClick: (_event, li) => pauseEncounter(getEncounter(li).id)
+    }, {
+      label: "Activate",
+      icon: "fa-solid fa-play",
+      visible: (li) => {
+        const encounter = getEncounter(li);
+        return encounter?.status !== "paused" && encounter?.id !== Store.activeId();
+      },
+      onClick: (_event, li) => activateEncounter(getEncounter(li).id)
+    }, {
+      label: "Duplicate as New Draft",
+      icon: "fa-solid fa-copy",
+      onClick: (_event, li) => duplicateEncounter(getEncounter(li).id)
+    }, {
+      label: "Export Data",
+      icon: "fa-solid fa-file-export",
+      onClick: (_event, li) => exportEncounterData(getEncounter(li).id)
+    }, {
+      label: "Import Data",
+      icon: "fa-solid fa-file-import",
+      onClick: () => importEncounterData()
+    }, {
+      label: "Delete",
+      icon: "fa-solid fa-trash",
+      onClick: (_event, li) => deleteEncounter(getEncounter(li).id)
+    }];
+  }
+
+  _onClickAction(event, target) {
+    event.preventDefault();
+    return handleSidebarAction({ currentTarget: target });
+  }
 }
 
 function renderInfluenceSidebar() {
-  const sidebar = document.getElementById("sidebar");
-  const tabsMenu = sidebar?.querySelector("#sidebar-tabs > menu");
-  const content = sidebar?.querySelector("#sidebar-content");
-  if (!tabsMenu || !content) return;
-  if (!tabsMenu.dataset.influenceTabBound) {
-    tabsMenu.dataset.influenceTabBound = "true";
-    tabsMenu.addEventListener("click", (event) => {
-      const selectedTab = event.target.closest("button[data-tab]")?.dataset.tab;
-      if (!selectedTab || selectedTab === "influence-encounters") return;
-      const influencePanel = document.getElementById("influence-encounters-sidebar");
-      if (influencePanel) {
-        influencePanel.classList.remove("active");
-        influencePanel.hidden = true;
-      }
-      const influenceButton = tabsMenu.querySelector('[data-tab="influence-encounters"]');
-      influenceButton?.classList.remove("active");
-      influenceButton?.setAttribute("aria-pressed", "false");
-      content.classList.remove("active-influence-encounters");
-      const selectedPanel = content.querySelector(`:scope > #${CSS.escape(selectedTab)}`);
-      selectedPanel?.classList.add("active");
-      if (selectedPanel) selectedPanel.hidden = false;
-    });
-  }
-  let tabButton = tabsMenu.querySelector('[data-tab="influence-encounters"]');
-  if (!tabButton) {
-    const item = document.createElement("li");
-    item.innerHTML = '<button type="button" class="ui-control plain icon fa-solid fa-comments" data-tab="influence-encounters" role="tab" aria-pressed="false" aria-label="Influence Encounter" data-tooltip="Influence Encounter"></button><div class="notification-pip"></div>';
-    tabButton = item.querySelector("button");
-    tabButton.addEventListener("click", activateInfluenceSidebar);
-    const journalItem = tabsMenu.querySelector('[data-tab="journal"]')?.closest("li");
-    if (journalItem) journalItem.after(item);
-    else tabsMenu.insertBefore(item, tabsMenu.lastElementChild);
-  }
-  let panel = document.getElementById("influence-encounters-sidebar");
-  if (!panel) {
-    panel = document.createElement("section");
-    panel.id = "influence-encounters-sidebar";
-    panel.className = "tab sidebar-tab flexcol influence-sidebar";
-    panel.hidden = true;
-    content.append(panel);
-  }
+  return ui.influenceEncounters?.render({ force: true });
+}
+
+function renderInfluenceSidebarContent() {
+  const panel = document.createElement("div");
   const encounter = Store.get();
   if (game.user.isGM) {
     panel.classList.add("directory");
@@ -1916,7 +2118,7 @@ function renderInfluenceSidebar() {
       const score = skillEncounter && encounter.skillScoringMode === "individual" && encounter.publicPoints ? ` <small>${skillActorPoints(encounter, actor.id)} SP</small>` : "";
       const contents = `<img src="${esc(participantPortrait(actor))}" alt=""><span>${esc(participantDisplayName(encounter, actor))}${score}</span><i class="fa-solid ${acted ? "fa-check" : "fa-hourglass"}" title="${acted ? "Acted this round" : "Has not acted"}"></i>`;
       return owned
-        ? `<button type="button" data-influence-action="select-participant" data-id="${actor.id}" class="influence-sidebar-person ${acted ? "acted" : ""} ${selected ? "selected" : ""}" ${acted ? "disabled" : ""} title="${acted ? "This PC has already acted" : `Act as ${esc(participantDisplayName(encounter, actor))}`}">${contents}</button>`
+        ? `<button type="button" data-action="select-participant" data-id="${actor.id}" class="influence-sidebar-person ${acted ? "acted" : ""} ${selected ? "selected" : ""}" ${acted ? "disabled" : ""} title="${acted ? "This PC has already acted" : `Act as ${esc(participantDisplayName(encounter, actor))}`}">${contents}</button>`
         : `<div class="influence-sidebar-person ${acted ? "acted" : ""}">${contents}</div>`;
     }).join("");
     const activeObstacleIndex = chase ? Math.max(0, encounter.npcs.findIndex((npc) => npc.id === encounter.activeNpcId)) : -1;
@@ -1927,30 +2129,24 @@ function renderInfluenceSidebar() {
       const actorState = research && selection.actorId ? researchActorState(npc, selection.actorId) : null;
       const actorStatus = actorState ? ` <small>Your PC: ${encounter.publicPoints ? `${actorState.points}${actorState.maximum ? `/${actorState.maximum}` : ""} RP · ` : ""}${esc(actorState.availability)}</small>` : "";
       const sourceStatus = encounter.publicPoints ? ` <small>${npc.points}${npc.maximumPoints ? `/${npc.maximumPoints}` : ""} RP</small>` : "";
-      return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-influence-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${subjectMarker}${research ? `${sourceStatus}${actorStatus}` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
+      return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${subjectMarker}${research ? `${sourceStatus}${actorStatus}` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
     }).join("");
     const activeNpc = visibleSources.find((npc) => npc.id === selection.npcId) ?? visibleSources[0];
     const points = research ? encounter.researchPoints : skillEncounter && encounter.skillScoringMode === "individual" ? skillActorPoints(encounter, selection.actorId) : skillEncounter ? encounter.skillPoints : activeNpc?.points ?? 0;
     const pointLabel = research ? "RP" : chase ? "CP" : skillEncounter ? "SP" : "IP";
     const researchDisabled = research && !researchSourceAvailableForActor(activeNpc, selection.actorId) ? " disabled" : "";
-    const actions = research ? `<button data-influence-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-influence-action="chase"><i class="fa-solid fa-person-running"></i> Make a Check</button>' : skillEncounter ? '<button data-influence-action="skill"><i class="fa-solid fa-dice-d20"></i> Make a Check</button>' : '<button data-influence-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-influence-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
+    const actions = research ? `<button data-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-action="chase"><i class="fa-solid fa-person-running"></i> Make a Check</button>' : skillEncounter ? '<button data-action="skill"><i class="fa-solid fa-dice-d20"></i> Make a Check</button>' : '<button data-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
     const chaseStatus = obscureChaseCourse ? `<p class="chase-relative-status">The ${esc(encounter.chaseSubject?.label || "Subject")} is ${encounter.chaseType === "run-away" || /pursuer/i.test(encounter.chaseSubject?.label || "") ? "behind you" : "ahead of you"}.</p>` : "";
     const skillGoal = skillEncounter && encounter.skillVictoryMode === "goal" ? `/${encounter.skillPointGoal}` : "";
-    panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : (chase || skillEncounter) ? `Round ${encounter.currentRound}${skillEncounter && encounter.roundLimit ? ` of ${encounter.roundLimit}` : ""}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : skillGoal} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : skillEncounter ? "Skill Challenges" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-influence-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" && !encounter.skillOutcome ? actions : ""}</div></div>`;
+    panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : (chase || skillEncounter) ? `Round ${encounter.currentRound}${skillEncounter && encounter.roundLimit ? ` of ${encounter.roundLimit}` : ""}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : skillGoal} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : skillEncounter ? "Skill Challenges" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div><div class="influence-sidebar-actions"><button data-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" && !encounter.skillOutcome ? actions : ""}</div></div>`;
   }
-  panel.onclick = (event) => {
-    const button = event.target.closest("[data-influence-action]");
-    if (button) return handleSidebarAction({ currentTarget: button });
-    const entry = game.user.isGM ? event.target.closest(".influence-sidebar-encounter") : null;
-    if (entry) return openSidebarEncounter(entry.dataset.entryId);
-  };
-  if (game.user.isGM) activateEncounterDirectoryListeners(panel);
+  return { html: panel.innerHTML, directory: panel.classList.contains("directory") };
 }
 
 function encounterDirectoryEntry(entry) {
   const active = entry.id === Store.activeId() && entry.status === "active";
   const paused = entry.status === "paused";
-  return `<li class="directory-item document influence-sidebar-encounter ${active ? "active" : ""} ${paused ? "paused" : ""}" data-entry-id="${entry.id}" data-folder-id="${esc(entry.folderId)}" draggable="true" tabindex="0"><img class="thumbnail" src="${esc(entry.image)}" alt=""><a class="document-name ellipsis">${esc(entry.name)}${paused ? " (Paused)" : ""}</a>${active ? '<i class="fa-solid fa-play influence-active-marker" data-tooltip="Active Encounter"></i>' : paused ? '<i class="fa-solid fa-pause influence-active-marker" data-tooltip="Paused Encounter"></i>' : ""}</li>`;
+  return `<li class="directory-item document influence-sidebar-encounter ${active ? "active" : ""} ${paused ? "paused" : ""}" data-entry-id="${entry.id}" data-folder-id="${esc(entry.folderId)}" draggable="true" tabindex="0"><img class="thumbnail" src="${esc(entry.image)}" alt=""><button type="button" class="document-name ellipsis" data-action="open-encounter" data-id="${entry.id}">${esc(entry.name)}${paused ? " (Paused)" : ""}</button>${active ? '<i class="fa-solid fa-play influence-active-marker" data-tooltip="Active Encounter"></i>' : paused ? '<i class="fa-solid fa-pause influence-active-marker" data-tooltip="Paused Encounter"></i>' : ""}</li>`;
 }
 
 function renderEncounterDirectory() {
@@ -1968,9 +2164,9 @@ function renderEncounterDirectory() {
     const expanded = query || !collapsedInfluenceFolders.has(folder.id);
     const colorStyle = folder.color ? ` style="background-color:${esc(folder.color)}"` : "";
     const borderStyle = folder.color ? ` style="border-left-color:${esc(folder.color)}"` : "";
-    return `<li class="directory-item folder flexcol influence-folder ${expanded ? "expanded" : ""}" data-folder-id="${folder.id}"><header class="folder-header"${colorStyle}><i class="fa-solid fa-folder-open fa-fw" inert></i><span class="folder-name ellipsis">${esc(folder.name)}</span><button type="button" class="create-button create-entry icon icon-plus fa-solid fa-comments" data-influence-action="new-encounter" data-folder-id="${folder.id}" data-tooltip aria-label="Create Encounter"></button></header><ol class="subdirectory plain"${borderStyle}>${children.map(encounterDirectoryEntry).join("")}</ol></li>`;
+    return `<li class="directory-item folder flexcol influence-folder ${expanded ? "expanded" : ""}" data-folder-id="${folder.id}"><header class="folder-header"${colorStyle}><i class="fa-solid fa-folder-open fa-fw" inert></i><span class="folder-name ellipsis">${esc(folder.name)}</span><button type="button" class="create-button create-entry icon icon-plus fa-solid fa-comments" data-action="new-encounter" data-folder-id="${folder.id}" data-tooltip aria-label="Create Encounter"></button></header><ol class="subdirectory plain"${borderStyle}>${children.map(encounterDirectoryEntry).join("")}</ol></li>`;
   }).join("");
-  return `<header class="directory-header"><div class="header-actions action-buttons flexrow"><button type="button" data-influence-action="new-encounter"><i class="fa-solid fa-file-circle-plus"></i> Create Encounter</button><button type="button" data-influence-action="new-folder"><i class="fa-solid fa-folder-plus"></i> Create Folder</button></div><search class="directory-search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" name="search" value="${esc(influenceSidebarSearch)}" autocomplete="off" placeholder="Search Encounters"><button type="button" class="inline-control icon fa-solid fa-xmark" data-influence-action="clear-search" aria-label="Clear Search"></button></search></header><ol class="directory-list plain">${rootEntries.sort((a, b) => a.name.localeCompare(b.name)).map(encounterDirectoryEntry).join("")}${folderHtml}${!encounters.length && !folders.length ? '<li class="directory-item"><p class="hint">No influence encounters found.</p></li>' : ""}</ol>`;
+  return `<header class="directory-header"><div class="header-actions action-buttons flexrow"><button type="button" data-action="new-encounter"><i class="fa-solid fa-file-circle-plus"></i> Create Encounter</button><button type="button" data-action="new-folder"><i class="fa-solid fa-folder-plus"></i> Create Folder</button></div><search class="directory-search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" name="search" value="${esc(influenceSidebarSearch)}" autocomplete="off" placeholder="Search Encounters"><button type="button" class="inline-control icon fa-solid fa-xmark" data-action="clear-search" aria-label="Clear Search"></button></search></header><ol class="directory-list plain">${rootEntries.sort((a, b) => a.name.localeCompare(b.name)).map(encounterDirectoryEntry).join("")}${folderHtml}${!encounters.length && !folders.length ? '<li class="directory-item"><p class="hint">No influence encounters found.</p></li>' : ""}</ol>`;
 }
 
 function activateEncounterDirectoryListeners(panel) {
@@ -1988,12 +2184,6 @@ function activateEncounterDirectoryListeners(panel) {
     });
   });
   panel.querySelectorAll(".influence-sidebar-encounter").forEach((entry) => {
-    entry.addEventListener("keydown", (event) => { if (event.key === "Enter") openSidebarEncounter(entry.dataset.entryId); });
-    entry.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      showEncounterContextMenu(event, entry.dataset.entryId);
-    });
     entry.addEventListener("dragstart", (event) => {
       event.dataTransfer.setData("application/x-influence-encounter", entry.dataset.entryId);
       event.dataTransfer.effectAllowed = "move";
@@ -2043,7 +2233,7 @@ function activateEncounterDirectoryListeners(panel) {
 function openSidebarEncounter(id) {
   if (!game.user.isGM) return;
   return id === Store.activeId() && Store.get(id)?.status === "active"
-    ? tracker.render(true)
+    ? renderTracker(true)
     : new EncounterEditor(Store.get(id)).render({ force: true });
 }
 
@@ -2305,6 +2495,14 @@ function showEncounterContextMenu(event, encounterId) {
 async function activateEncounter(id) {
   const encounter = Store.get(id);
   if (!encounter) return;
+  if (encounter.subsystemType === "starship" && encounter.status === "draft") {
+    encounter.currentRound = 1;
+    encounter.actorsActed = {};
+    encounter.pendingChecks = [];
+    encounter.starship.stage = "role-selection";
+    encounter.starship.roleSelections = {};
+    encounter.starship.actionSelections = {};
+  }
   const startingDraftChase = encounter.subsystemType === "chase" && encounter.status === "draft";
   if (startingDraftChase) {
     const firstObstacle = encounter.npcs.find((obstacle) => Number(obstacle.points) < Number(obstacle.maximumPoints || 0)) ?? encounter.npcs[0];
@@ -2328,7 +2526,7 @@ async function activateEncounter(id) {
   encounter.presentationVisible = true;
   await Store.setActive(id);
   await Store.save(encounter);
-  tracker?.render(true);
+  renderTracker(true);
   renderInfluenceSidebar();
   renderCinematicHud();
   game.socket.emit(SOCKET, { action: "open-encounter", encounterId: id });
@@ -2359,7 +2557,7 @@ async function resumeEncounter(id) {
   encounter.presentationVisible = true;
   await Store.setActive(id);
   await Store.save(encounter);
-  tracker?.render(true);
+  renderTracker(true);
   renderInfluenceSidebar();
   renderCinematicHud();
   game.socket.emit(SOCKET, { action: "open-encounter", encounterId: id });
@@ -2396,6 +2594,11 @@ async function duplicateEncounter(id) {
     duplicate.subjectStartPosition = Math.min(Math.max(0, duplicate.npcs.length - 1), Math.max(0, Number(source.subjectStartPosition) || 0));
     duplicate.opponentPosition = duplicate.subjectStartPosition;
     duplicate.activeEffects.forEach((effect) => effect.remaining = effect.uses);
+  }
+  if (duplicate.subsystemType === "starship") {
+    duplicate.starship.stage = "role-selection";
+    duplicate.starship.roleSelections = {};
+    duplicate.starship.actionSelections = {};
   }
   duplicate.progressClock.clockId = "";
   await Store.save(duplicate);
@@ -2493,7 +2696,8 @@ async function deleteEncounter(id) {
 }
 
 async function handleSidebarAction(event) {
-  const action = event.currentTarget.dataset.influenceAction;
+  const action = event.currentTarget.dataset.action ?? event.currentTarget.dataset.influenceAction;
+  if (action === "open-directory-encounter") return openSidebarEncounter(event.currentTarget.dataset.id);
   if (action === "new-encounter" && game.user.isGM) {
     event.stopPropagation?.();
     return openCreateEncounterDialog(event, event.currentTarget.dataset.folderId || "");
@@ -2507,10 +2711,10 @@ async function handleSidebarAction(event) {
   if (action === "open-encounter" && game.user.isGM) {
     const id = event.currentTarget.dataset.id;
     return id === Store.activeId() && Store.get(id)?.status === "active"
-      ? tracker.render(true)
+      ? renderTracker(true)
       : new EncounterEditor(Store.get(id)).render({ force: true });
   }
-  if (action === "open") return tracker.render(true);
+  if (action === "open") return renderTracker(true);
   if (action === "manage") return new EncounterManager().render(true);
   const encounter = Store.get();
   if (!encounter) return;
@@ -2694,6 +2898,10 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       characterActors,
       starshipActors,
       starshipActorChoices: { "": shipsFolders.length ? "Choose an Actor from Ships…" : "No Actor folder named Ships found", ...Object.fromEntries(starshipActors.map((actor) => [actor.id, actor.name])) },
+      starshipFallbackIcons: STARSHIP_FALLBACK_ICONS,
+      starshipShipStatModes: { explicit: "Show Explicit Ship Stats", vague: "Show Vague Ship Stats", hidden: "Hide Ship Stats" },
+      starshipClockModes: { countup: "Count Up (0 to limit)", countdown: "Count Down (limit to 0)", points: "Points tracker (keeps increasing)" },
+      starshipVictoryModes: { calculated: "Calculated", gm: "Manual — GM decides" },
       skillChoices: [...PF2E_SKILLS, ...(game.system.id === "sf2e" ? SF2E_SKILLS : []), ...((isChase || isSkill) ? PF2E_SAVES : []), ...PF2E_LORE_SKILLS, ...Object.keys(LORE_CATEGORIES)],
       tabs,
       modifierTypes: { circumstance: "Circumstance", status: "Status", item: "Item", untyped: "Untyped" },
@@ -2736,6 +2944,13 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
         await this.render({ force: true });
       });
     }
+    this.element.querySelector('[name="starship.countdown.mode"]')?.addEventListener("change", async (event) => {
+      this._capture();
+      const clock = this.encounter.starship.countdown;
+      clock.value = event.currentTarget.value === "countdown" ? clock.limit : 0;
+      this._dirty = true;
+      await this.render({ force: true });
+    });
     this.element.querySelectorAll('[name^="participantNicknames."]').forEach((input) => input.addEventListener("input", () => {
       this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
     }));
@@ -2747,7 +2962,14 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       const shipKey = picker.dataset.starshipShipPicker;
       const ship = this.encounter.starship?.ships?.[shipKey];
       const actor = game.actors.get(picker.value);
-      if (!ship || !actor) return;
+      if (!ship) return;
+      if (!actor) {
+        this._capture();
+        ship.actorId = "";
+        this._dirty = true;
+        this.render({ force: true });
+        return;
+      }
       const otherShip = Object.entries(this.encounter.starship.ships).find(([key, entry]) => key !== shipKey && entry.actorId === actor.id);
       if (otherShip) {
         picker.value = ship.actorId || "";
@@ -2914,9 +3136,14 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const npcUpdates = indexedArray(expanded.npcs);
     const thresholdUpdates = indexedArray(expanded.researchThresholds);
     const effectUpdates = indexedArray(expanded.activeEffects);
+    // Activities carry system behavior beyond the editable fields (difficulty,
+    // damage, shield interaction, etc.). Merge the form's edits into the saved
+    // role/activity objects so Save Changes does not erase that metadata.
+    const starshipRoleUpdates = indexedArray(expanded.starship?.roles);
     delete expanded.npcs;
     delete expanded.researchThresholds;
     delete expanded.activeEffects;
+    if (expanded.starship) delete expanded.starship.roles;
     foundry.utils.mergeObject(this.encounter, expanded, { inplace: true, overwrite: true });
     npcUpdates.forEach((update, index) => {
       const existing = this.encounter.npcs[index];
@@ -2929,6 +3156,17 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     effectUpdates.forEach((update, index) => {
       const existing = this.encounter.activeEffects[index];
       if (existing) foundry.utils.mergeObject(existing, update, { inplace: true, overwrite: true });
+    });
+    starshipRoleUpdates.forEach((update, roleIndex) => {
+      const existing = this.encounter.starship?.roles?.[roleIndex];
+      if (!existing) return;
+      const activityUpdates = indexedArray(update.activities);
+      delete update.activities;
+      foundry.utils.mergeObject(existing, update, { inplace: true, overwrite: true });
+      activityUpdates.forEach((activityUpdate, activityIndex) => {
+        const activity = existing.activities?.[activityIndex];
+        if (activity) foundry.utils.mergeObject(activity, activityUpdate, { inplace: true, overwrite: true });
+      });
     });
   }
   _capture(formData = new foundry.applications.ux.FormDataExtended(this.element).object) {
@@ -3077,6 +3315,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       const priorActiveState = this.encounter.id ? Store.get(this.encounter.id) : null;
       this._mergeFormData(formData);
       normalizeEncounterCollections(this.encounter);
+      if (this.encounter.subsystemType === "starship") updateStarshipCalculatedOutcome(this.encounter);
       this.encounter.publicPoints = this.element.querySelector('[name="publicPoints"]')?.checked ?? false;
       this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
       this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
@@ -3170,11 +3409,11 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 }
 
-async function requestStarshipRole(encounter, actorId, roleId) {
+async function requestStarshipRole(encounter, actorId, roleId, { unclaim = false } = {}) {
   const actor = game.actors.get(actorId);
   if (!actor) return ui.notifications.warn("Choose a participating PC first.");
   if (!game.user.isGM && !canUserControlActor(actor)) return ui.notifications.warn(`You must be an Owner of ${actor.name} to claim a crew role.`);
-  const payload = { action: "starship-role", encounterId: encounter.id, actorId, roleId, userId: game.user.id };
+  const payload = { action: "starship-role", encounterId: encounter.id, actorId, roleId, userId: game.user.id, unclaim };
   if (game.user.isGM) return assignStarshipRole(payload);
   game.socket.emit(SOCKET, payload);
 }
@@ -3188,6 +3427,16 @@ async function assignStarshipRole(payload) {
   const user = game.users.get(payload.userId);
   if (!user?.isGM && !canUserControlActor(actor, user)) return;
   if (!encounterParticipants(encounter).some((participant) => participant.id === actor.id)) return;
+  if (payload.unclaim) {
+    if (encounter.starship.roleSelections[actor.id] !== role.id) return;
+    snapshot(encounter, `${participantDisplayName(encounter, actor)} unclaims ${role.label}`);
+    delete encounter.starship.roleSelections[actor.id];
+    delete encounter.starship.actionSelections[actor.id];
+    await Store.save(encounter);
+    tracker?.render(true);
+    game.socket.emit(SOCKET, { action: "refresh" });
+    return;
+  }
   const occupied = Object.entries(encounter.starship.roleSelections).filter(([assignedActorId, assignedRoleId]) => assignedActorId !== actor.id && assignedRoleId === role.id).length;
   if (occupied >= role.capacity) {
     game.socket.emit(SOCKET, { action: "check-request-status", userId: payload.userId, message: `${role.label} has no open seats.` });
@@ -3197,6 +3446,7 @@ async function assignStarshipRole(payload) {
   encounter.starship.roleSelections[actor.id] = role.id;
   encounter.starship.actionSelections[actor.id] = {};
   await Store.save(encounter);
+  tracker?.render(true);
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
@@ -3209,6 +3459,12 @@ async function setStarshipActionSelection(encounter, actorId, activityId, skillS
   const selectedSkill = skillSlug || starshipActivityChoices(actor, activity)[0]?.slug || "";
   const payload = { action: "starship-action-selection", encounterId: encounter.id, actorId, activityId, skillSlug: selectedSkill, userId: game.user.id };
   if (game.user.isGM) return saveStarshipActionSelection(payload);
+  await setEncounterViewSelection(encounter, {
+    starshipActionId: activity.id,
+    starshipSkillSlug: selectedSkill,
+    starshipRound: Number(encounter.currentRound)
+  });
+  tracker?.render(false);
   game.socket.emit(SOCKET, payload);
 }
 
@@ -3224,13 +3480,15 @@ async function saveStarshipActionSelection(payload) {
   if (!skill) return;
   encounter.starship.actionSelections[actor.id] = { activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label };
   await Store.save(encounter);
+  tracker?.render(true);
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
 async function startStarshipRound(encounterId) {
   if (!game.user.isGM) return;
   const encounter = Store.get(encounterId);
-  if (!encounter || encounter.subsystemType !== "starship" || encounter.status !== "active" || encounter.starship.stage !== "role-selection") return;
+  if (!encounter || encounter.subsystemType !== "starship" || encounter.status !== "active" || encounter.starship.stage !== "role-selection" || starshipCalculatedOutcome(encounter)) return;
+  if (!encounterParticipants(encounter).every((actor) => encounter.starship.roleSelections[actor.id])) return ui.notifications.warn("Each participating PC must claim a crew role before the round starts.");
   snapshot(encounter, `Start starship round ${encounter.currentRound}`);
   encounter.starship.stage = "actions";
   encounter.starship.actionSelections = {};
@@ -3241,7 +3499,7 @@ async function startStarshipRound(encounterId) {
 async function nextStarshipRound(encounterId) {
   if (!game.user.isGM) return;
   const encounter = Store.get(encounterId);
-  if (!encounter || encounter.subsystemType !== "starship" || encounter.status !== "active" || encounter.starship.stage !== "actions") return;
+  if (!encounter || encounter.subsystemType !== "starship" || encounter.status !== "active" || encounter.starship.stage !== "actions" || starshipCalculatedOutcome(encounter)) return;
   if (encounter.pendingChecks?.length) return ui.notifications.warn("Resolve or cancel pending crew actions before beginning the next round.");
   snapshot(encounter, `Begin starship round ${Number(encounter.currentRound) + 1}`);
   encounter.currentRound += 1;
@@ -3267,14 +3525,30 @@ async function adjustStarshipValue(encounterId, path, delta) {
     if (!ship || !["hp", "shields"].includes(key)) return;
     ship[key] = Math.max(0, Math.min(key === "hp" ? ship.maxHp : Number.POSITIVE_INFINITY, Number(ship[key]) + delta));
   }
+  updateStarshipCalculatedOutcome(encounter);
   await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+}
+
+async function declareStarshipOutcome(encounterId, outcome) {
+  if (!game.user.isGM || !["victory", "failure"].includes(outcome)) return;
+  const encounter = Store.get(encounterId);
+  if (!encounter || encounter.subsystemType !== "starship" || encounter.status !== "active" || encounter.starship.victoryMode !== "gm") return;
+  snapshot(encounter, `Declare starship ${outcome}`);
+  encounter.starship.outcome = outcome;
+  await Store.save(encounter);
+  await ChatMessage.create({ content: `<div class="influence-chat influence-result ${outcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${outcome === "victory" ? "Starship Victory" : "Starship Defeat"}</strong><p>${esc(outcome === "victory" ? (encounter.victoryText || "The enemy ship has been defeated.") : (encounter.failureText || "The crew's objective was not achieved."))}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
 async function requestStarshipCheck(encounter, actorId) {
   const actor = game.actors.get(actorId);
   const roleId = encounter?.starship?.roleSelections?.[actorId];
-  const selection = encounter?.starship?.actionSelections?.[actorId];
+  const localSelection = encounterViewSelection(encounter);
+  const selection = encounter?.starship?.actionSelections?.[actorId]
+    ?? (!game.user.isGM && localSelection.starshipRound === Number(encounter.currentRound)
+      ? { activityId: localSelection.starshipActionId, skillSlug: localSelection.starshipSkillSlug }
+      : null);
   const activity = starshipActivityFor(encounter, roleId, selection?.activityId);
   const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === selection?.skillSlug);
   if (!actor || !activity || !skill) return ui.notifications.warn("Choose a role, activity, and trained eligible statistic first.");
@@ -3546,11 +3820,13 @@ async function adjudicateStarship(request, encounter, actor) {
 }
 
 async function executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, dcAdjust) {
-  const statistic = skillStatistic(actor, skill.slug, skill.label);
+  const statistic = skill.slug === "simple-ranged"
+    ? starshipSimpleRangedStatistic(actor)
+    : skillStatistic(actor, skill.slug, skill.label);
   if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
   const rollModifiers = selected.map((modifier) => new game.pf2e.Modifier({ slug: `starship-${String(modifier.id).slugify()}`, label: modifier.label, modifier: Number(modifier.value), type: modifier.type || "untyped" }));
   const effectiveDC = Number(activity.dc) + dcAdjust;
-  const roll = await statistic.roll({
+  const roll = await statistic.roll.call(statistic, {
     dc: { value: effectiveDC, visible: false, label: `${encounter.name} — ${activity.label}` },
     modifiers: rollModifiers,
     extraRollOptions: [`influence:starship:${activity.id}`, `influence:encounter:${encounter.id}`],
@@ -3585,6 +3861,8 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   } else if (activity.damage) {
     damageReport = `<p><strong>${esc(activity.label)}</strong> misses ${esc(encounter.starship.ships[activity.target ?? "heart"].name)}.</p>`;
   }
+  const starshipOutcome = updateStarshipCalculatedOutcome(encounter);
+  if (starshipOutcome) logEntry.details.push(starshipOutcome === "victory" ? "Starship victory." : "Starship defeat.");
   await Store.save(encounter);
   game.socket.emit(SOCKET, { action: "refresh" });
   await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(role.label)}</strong><p>${esc(actorName)} used ${esc(skill.label)} for ${esc(activity.label)}: <strong>${outcome}</strong>.</p>${damageReport}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
@@ -3877,11 +4155,44 @@ function promptNumber(title, value) { return new Promise((resolve) => new Dialog
 function promptSelect(title, options, confirmLabel = "Reveal") { return new Promise((resolve) => new Dialog({ title, content: `<select name="value">${options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select>`, buttons: { ok: { label: confirmLabel, callback: (h) => resolve(h.find('[name="value"]').val()) }, cancel: { label: "Cancel", callback: () => resolve(null) } }, close: () => resolve(null) }).render(true)); }
 
 let tracker;
+
+/**
+ * The tracker deliberately remains an ApplicationV1 compatibility window for
+ * its established system-styled surface. A freshly closed V1 instance can be
+ * in its short closing transition when an encounter is resumed, so replace it
+ * before asking Foundry to show the window again.
+ */
+function renderTracker(force = true) {
+  if (!tracker || tracker.closing) tracker = new InfluenceTracker();
+  tracker.options.title = Store.get()?.subsystemType === "starship" ? "Starship Encounter" : "Influence Encounter";
+  return tracker.render(force);
+}
 Hooks.once("init", () => {
+  CONFIG.ui.influenceEncounters = InfluenceSidebar;
+  const sidebarTabs = CONFIG.ui.sidebar.TABS;
+  const influenceTab = { tooltip: "Influence Encounter", icon: "fa-solid fa-comments" };
+  const orderedTabs = [];
+  for (const [key, value] of Object.entries(sidebarTabs)) {
+    orderedTabs.push([key, value]);
+    if (key === "journal") orderedTabs.push(["influenceEncounters", influenceTab]);
+  }
+  if (!orderedTabs.some(([key]) => key === "influenceEncounters")) orderedTabs.push(["influenceEncounters", influenceTab]);
+  for (const key of Object.keys(sidebarTabs)) delete sidebarTabs[key];
+  Object.assign(sidebarTabs, Object.fromEntries(orderedTabs));
   game.settings.register(MODULE_ID, SETTINGS.encounters, { scope: "world", config: false, type: Object, default: {} });
   game.settings.register(MODULE_ID, SETTINGS.active, { scope: "world", config: false, type: String, default: "" });
   game.settings.register(MODULE_ID, SETTINGS.folders, { scope: "world", config: false, type: Array, default: [] });
   game.settings.register(MODULE_ID, SETTINGS.selections, { scope: "client", config: false, type: Object, default: {} });
+  game.settings.register(MODULE_ID, SETTINGS.showProgressClocks, {
+    name: "Show Global Progress Clocks",
+    hint: "Show clocks from the optional Global Progress Clocks module on this client. This does not affect other users.",
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: true,
+    requiresReload: false,
+    onChange: applyProgressClockVisibility
+  });
   game.settings.register(MODULE_ID, SETTINGS.highlightOnActivation, {
     name: "Guide participants to the encounter control",
     hint: "When Remote Highlight UI is active, spotlight the left canvas Influence Encounter control for owners of participating PCs when an encounter is activated or resumed.",
@@ -3892,10 +4203,16 @@ Hooks.once("init", () => {
     restricted: true,
     requiresReload: false
   });
-  loadTemplates([`modules/${MODULE_ID}/templates/trait-fields.hbs`]);
+  loadTemplates([
+    `modules/${MODULE_ID}/templates/trait-fields.hbs`,
+    `modules/${MODULE_ID}/templates/sidebar.hbs`,
+    `modules/${MODULE_ID}/templates/tracker.hbs`,
+    `modules/${MODULE_ID}/templates/starship-tracker.hbs`
+  ]);
 });
 
 Hooks.once("ready", async () => {
+  applyProgressClockVisibility();
   const orphanedActiveId = Store.activeId();
   if (game.user.isGM && orphanedActiveId && !Store.get(orphanedActiveId)) await Store.setActive("");
   tracker = new InfluenceTracker();
@@ -3907,7 +4224,7 @@ Hooks.once("ready", async () => {
     if (payload.action === "discovery-offer" && payload.userId === game.user.id) collectDiscoveryChoices(payload.choices, payload.actorId).then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
     if (payload.action === "discovery-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveDiscovery(payload.encounterId, payload.userId, payload.selections, payload.logEntryId);
     if (payload.action === "progress-clock-refresh") progressClockDatabase()?.refresh?.();
-    if (payload.action === "open-encounter" && (!payload.userIds || payload.userIds.includes(game.user.id))) setTimeout(() => tracker?.render(true), 150);
+    if (payload.action === "open-encounter" && (!payload.userIds || payload.userIds.includes(game.user.id))) setTimeout(() => renderTracker(true), 150);
     if (payload.action === "close-encounter" && (!payload.encounterId || payload.encounterId === Store.activeId())) tracker?.close();
     if (payload.action === "victory-splash") {
       const encounter = Store.get(payload.encounterId);
@@ -3919,13 +4236,12 @@ Hooks.once("ready", async () => {
       renderInfluenceSidebar();
     }
   });
-  game[MODULE_ID] = { open: () => tracker.render(true), manage: () => new EncounterManager().render(true), Store };
+  game[MODULE_ID] = { open: () => renderTracker(true), manage: () => new EncounterManager().render(true), Store };
   setTimeout(() => { renderInfluenceSidebar(); renderCinematicHud(); }, 250);
-  setTimeout(() => { const active = Store.get(); if (active?.status === "active") tracker?.render(true); }, 350);
+  setTimeout(() => { const active = Store.get(); if (active?.status === "active") renderTracker(true); }, 350);
   setTimeout(() => resumePendingDiscoveries(), 500);
 });
 
-Hooks.on("renderSidebar", () => renderInfluenceSidebar());
 function markInfluenceChatMessage(message, html) {
   let kind = message.getFlag(MODULE_ID, "messageKind");
   if (!kind && message.whisper?.length && /<strong>Discovery:/i.test(message.content ?? "")) kind = "discovery-reveal";
@@ -3938,26 +4254,18 @@ Hooks.on("renderChatMessage", markInfluenceChatMessage);
 Hooks.on("renderChatMessageHTML", markInfluenceChatMessage);
 Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); });
 
-Hooks.on("renderSceneControls", (_app, html) => {
-  const root = html instanceof HTMLElement ? html : html[0];
-  const tools = root?.querySelector("#scene-controls-tools");
-  if (!tools || tools.querySelector(".influence-control")) return;
-  const item = document.createElement("li");
-  item.innerHTML = '<button type="button" class="control ui-control tool icon fa-solid fa-comments influence-control" aria-label="Influence Encounter" data-tooltip="Influence Encounter"></button>';
-  item.querySelector("button").addEventListener("click", () => tracker?.render(true));
-  tools.append(item);
-});
-
-Hooks.on("renderJournalDirectory", (_app, html) => {
-  const root = html instanceof HTMLElement ? html : html[0];
-  if (!root || root.querySelector(".influence-journal-button")) return;
-  const button = document.createElement("button");
-  button.type = "button"; button.className = "influence-journal-button";
-  button.innerHTML = '<i class="fa-solid fa-comments"></i><span>Influence Encounter</span>';
-  button.addEventListener("click", () => tracker.render(true));
-  const actions = root.querySelector(".directory-header .header-actions");
-  const footer = root.querySelector(".directory-footer");
-  (actions ?? footer ?? root).append(button);
+Hooks.on("getSceneControlButtons", (controls) => {
+  const tokenTools = controls.tokens?.tools;
+  if (!tokenTools || tokenTools["influence-encounter"]) return;
+  tokenTools["influence-encounter"] = {
+    name: "influence-encounter",
+    title: "Influence Encounter",
+    icon: "fa-solid fa-comments",
+    order: Object.keys(tokenTools).length,
+    button: true,
+    visible: true,
+    onChange: () => tracker?.render(false)
+  };
 });
 
 Hooks.on("influenceEncounterUpdated", (id) => {

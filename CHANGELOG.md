@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0 — 2026-10-07
+
+- Expanded the SF2e Starship encounter prototype with round-by-round crew role claims, player-owned action selection, GM adjudication, updated Gunner actions and weapon-strike rolls, ship Actor/token art, configurable player-facing ship-stat visibility, named count-up/countdown/points trackers, calculated or GM-decided outcomes, manual ship and tracker adjustments, and player-safe enemy damage states.
+- Preserved the established encounter tracker presentation while adding Starship content; a full V2 tracker migration remains deferred until it can match the existing UI exactly.
+
 ## 0.7.9 — 2026-10-06
 
 - Added per-source, target, obstacle, and challenge Esoteric Lore controls. Mark a subject as Esoteric Lore Relevant, then optionally mark it as involving monsters, haunts, or curses.
