@@ -1379,7 +1379,9 @@ function balancedChasePoints(basePoints, participantCount, designedPartySize) {
 }
 
 function actorStatisticModifier(actor, skill) {
-  const statistic = skillStatistic(actor, skill.slug, skill.label);
+  const statistic = skill?.slug === "attack"
+    ? starshipSimpleRangedStatistic(actor)
+    : skillStatistic(actor, skill.slug, skill.label);
   const value = Number(statistic?.mod ?? statistic?.check?.mod ?? statistic?.modifier ?? statistic?.value);
   return Number.isFinite(value) ? value : null;
 }
@@ -1623,8 +1625,12 @@ function trainedAttemptSkills(actor, npc) {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function knownConfiguredSkills(actor, skills, npc, property) {
+function knownConfiguredSkills(actor, skills, npc, property, { allowShipGunnery = false } = {}) {
   const trained = new Map(trainedAttemptSkills(actor, npc).map((skill) => [skill.slug, skill]));
+  // Chase obstacles can explicitly request a ship-gunnery attack. Ship guns use
+  // the PC's base Simple Ranged attack statistic, not a personal weapon Strike.
+  const gunnery = allowShipGunnery ? starshipSimpleRangedStatistic(actor) : null;
+  if (gunnery) trained.set("attack", { slug: "attack", label: "Ship Gunnery", lore: false, rank: gunnery.rank });
   return availableSkillsForActor(actor, skills, npc)
     .filter((skill) => property === "secret" ? !skill.secret : !!skill[property])
     .flatMap((skill) => {
@@ -3750,7 +3756,11 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
     const attemptOptions = attempts.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
     options = `${knownOptions}${knownOptions && attemptOptions ? '<option disabled>──────────</option>' : ""}${attemptOptions}`;
   } else {
-    const knownSkills = type === "influence" ? knownConfiguredSkills(actor, npc.influence, npc, "known") : availableSkillsForActor(actor, npc.influence, npc);
+    const knownSkills = type === "influence"
+      ? knownConfiguredSkills(actor, npc.influence, npc, "known")
+      : isChase
+        ? knownConfiguredSkills(actor, npc.influence, npc, "known", { allowShipGunnery: true })
+        : availableSkillsForActor(actor, npc.influence, npc);
     const attempts = type === "influence" ? speculativeAttemptSkills(actor, npc, knownSkills) : [];
     selectableSkills = knownSkills;
     if (!knownSkills.length && !attempts.length) return ui.notifications.warn(`${actor.name} has no trained ${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : "Influence"} checks.`);
@@ -4071,7 +4081,9 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   }
   const actorName = participantDisplayName(encounter, actor);
   const npcName = targetDisplayName(npc);
-  const statistic = skillStatistic(actor, skill.slug, skill.label);
+  const statistic = request.type === "chase" && skill.slug === "attack"
+    ? starshipSimpleRangedStatistic(actor)
+    : skillStatistic(actor, skill.slug, skill.label);
   if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
   const effectiveDC = Number(skill.dc) + dcAdjust;
   const rollModifiers = selected.filter((mod) => mod.mode !== "dc").map((mod) => new game.pf2e.Modifier({

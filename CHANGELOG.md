@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.4 — 2026-10-07
+
+- Chase obstacles can now configure **Gunner - Attack** checks. These use the acting PC's base Simple Ranged weapon statistic for ship gunnery—Dexterity, level, and Simple Weapon proficiency—without applying a personal weapon or its runes.
+
 ## 0.8.3 — 2026-10-07
 
 - Repaired encounter-directory folders: native collapse/expand actions work reliably, folder moves immediately rerender and synchronize, and the encounter context menu now includes **Move to Folder** as a direct fallback to drag-and-drop.
