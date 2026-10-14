@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.5 — 2026-10-14
+
+- Made **Perception** a consistent GM-configurable option across every encounter type, including Starship activity skill lists. It uses each PC's actual Perception statistic even though PF2e and SF2e store it outside the ordinary skills collection.
+- Clarified the Starship activity editor guidance for adding Perception.
+
 ## 0.8.4 — 2026-10-07
 
 - Chase obstacles can now configure **Gunner - Attack** checks. These use the acting PC's base Simple Ranged weapon statistic for ship gunnery—Dexterity, level, and Simple Weapon proficiency—without applying a personal weapon or its runes.

@@ -201,7 +201,7 @@ function starshipActivityFor(encounter, roleId, activityId) {
 
 function starshipActivityChoices(actor, activity) {
   if (!actor || !activity) return [];
-  const choices = trainedSkillChoices(actor);
+  const choices = trainedSkillChoicesWithPerception(actor);
   // Starship scenes can explicitly opt into narrative Lore substitutions.
   const allowed = choices.filter((skill) => activity.skills.includes(skill.slug) || (!!activity.allowLore && skill.lore));
   if (activity.skills.includes("simple-ranged")) {
@@ -1605,21 +1605,29 @@ function trainedSkillChoices(actor) {
   return actorSkillChoices(actor).filter((skill) => skill.rank >= 1);
 }
 
+function perceptionChoice(actor) {
+  const perception = skillStatistic(actor, "perception", "Perception");
+  if (!perception?.roll) return null;
+  return {
+    slug: "perception",
+    label: game.i18n.localize(perception.label ?? "Perception"),
+    lore: false,
+    rank: Number(perception.rank ?? actor?.perception?.rank) || 0
+  };
+}
+
+function trainedSkillChoicesWithPerception(actor) {
+  const skills = trainedSkillChoices(actor);
+  // Perception is rollable by every PC but lives outside actor.skills in both
+  // PF2e and SF2e. Treat it as an explicit exception to trained-only pickers.
+  const perception = perceptionChoice(actor);
+  if (perception && !skills.some((skill) => skill.slug === perception.slug)) skills.push(perception);
+  return skills.sort((a, b) => a.label.localeCompare(b.label));
+}
+
 function trainedAttemptSkills(actor, npc) {
   const esoteric = esotericLoreState(actor, npc);
-  const skills = trainedSkillChoices(actor);
-  // Perception is a rollable PF2e/SF2e statistic, not an entry in actor.skills.
-  // Every PC can attempt it, so give it the same first-class treatment as a
-  // trained skill in encounter pickers.
-  const perception = skillStatistic(actor, "perception", "Perception");
-  if (perception?.roll && !skills.some((skill) => skill.slug === "perception")) {
-    skills.push({
-      slug: "perception",
-      label: game.i18n.localize(perception.label ?? "Perception"),
-      lore: false,
-      rank: Math.max(1, Number(perception.rank ?? actor?.perception?.rank) || 1)
-    });
-  }
+  const skills = trainedSkillChoicesWithPerception(actor);
   return skills
     .filter((skill) => skill.slug !== "esoteric-lore" || !!esoteric)
     .sort((a, b) => a.label.localeCompare(b.label));
