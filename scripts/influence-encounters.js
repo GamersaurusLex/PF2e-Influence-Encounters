@@ -500,8 +500,10 @@ function parseChaseChecks(text) {
 }
 
 function parseChaseObstacles(source) {
-  const text = String(source).replace(/\r/g, "");
-  const headers = [...text.matchAll(/^\s*([^\n]+?)\s+OBSTACLE\s+(\d+)\s*$/gim)];
+  // Paizo PDF copy/paste can introduce non-printing page-layout characters
+  // between a title and "OBSTACLE". Published headings also omit a level often.
+  const text = String(source).replace(/\r/g, "").replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "");
+  const headers = [...text.matchAll(/^\s*(?:\d+\.\s*)?([^\n]+?)\s+OBSTACLE(?:\s+(\d+))?\s*$/gim)];
   const obstacles = [];
   for (let index = 0; index < headers.length; index += 1) {
     const header = headers[index];
@@ -526,7 +528,7 @@ function parseChaseObstacles(source) {
     const description = descriptionIndex < 0 ? "" : statLines.slice(descriptionIndex).join(" ");
     obstacles.push(chaseObstacle(randomID(), chaseTitle(header[1].trim()), points, checks.map((skill) => [skill.slug, skill.label, skill.dc, skill.lore]), description));
   }
-  return { obstacles, level: headers.length ? Number(headers[0][2]) : 0 };
+  return { obstacles, level: Number(headers[0]?.[2] ?? 0) };
 }
 
 function normalizeReward(boon, targetId = "") {
@@ -1567,6 +1569,10 @@ function isLoreSkill(skill) {
   return !!skill.lore || /(?:^|-)lore$/.test(String(skill.slug ?? "").toLowerCase()) || / lore$/i.test(String(skill.label ?? ""));
 }
 
+function isAnyLoreSkill(skill) {
+  return !!skill.anyLore || /^any\s+lore$/i.test(String(skill.label ?? "").trim());
+}
+
 function esotericLoreState(actor, npc) {
   const configured = { slug: "esoteric-lore", label: "Esoteric Lore", lore: true };
   const skill = actorSkillChoices(actor).find((choice) => choice.slug === configured.slug)
@@ -1579,10 +1585,20 @@ function esotericLoreState(actor, npc) {
 
 function availableSkillsForActor(actor, skills, npc = null) {
   const esoteric = esotericLoreState(actor, npc);
-  return skills.filter((skill) => {
+  return skills.flatMap((skill) => {
+    // "Any Lore" is published shorthand for every trained Lore the acting PC has.
+    if (isAnyLoreSkill(skill)) return trainedSkillChoices(actor).filter((choice) => choice.lore)
+      .map((choice) => ({ ...skill, anyLore: true, id: `${skill.id}:${choice.slug}`, sourceSkillId: skill.id, slug: choice.slug, label: choice.label, lore: true }));
     if (skill.slug === "esoteric-lore") return !!esoteric;
     return !isLoreSkill(skill) || !!loreItemForSkill(actor, skill);
   }).map((skill) => skill.slug === "esoteric-lore" ? { ...skill, diverseLore: esoteric?.diverseLore } : skill);
+}
+
+function configuredSaveChoice(actor, skill) {
+  if (!Object.values(PF2E_SAVE_SLUGS).includes(skill.slug)) return null;
+  const statistic = skillStatistic(actor, skill.slug, skill.label);
+  if (!statistic?.roll) return null;
+  return { slug: skill.slug, label: skill.label, lore: false, rank: Number(statistic.rank) || 0 };
 }
 
 function ensureEsotericLoreChecks(encounter, npc) {
@@ -1642,7 +1658,7 @@ function knownConfiguredSkills(actor, skills, npc, property, { allowShipGunnery 
   return availableSkillsForActor(actor, skills, npc)
     .filter((skill) => property === "secret" ? !skill.secret : !!skill[property])
     .flatMap((skill) => {
-      const actorSkill = trained.get(skill.slug);
+      const actorSkill = trained.get(skill.slug) ?? configuredSaveChoice(actor, skill);
       return actorSkill ? [{ ...actorSkill, ...skill, rank: actorSkill.rank }] : [];
     });
 }
@@ -3786,8 +3802,11 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
       const [source, value] = selection.split(":");
       const actorChoice = source === "actor" ? trainedAttemptSkills(actor, npc).find((skill) => skill.slug === value) : null;
       const configuredChoice = source === "configured" ? selectableSkills.find((skill) => skill.id === value) : null;
+      const anyLore = isAnyLoreSkill(configuredChoice);
       const payload = { action: "check-request", encounterId: encounter.id, npcId: npc.id, requesterId: game.user.id, actorId: actor.id, type,
-        skillId: source === "configured" ? value : null, skillSlug: actorChoice?.slug ?? null, skillLabel: actorChoice?.label ?? null, diverseLore: !!configuredChoice?.diverseLore };
+        skillId: source === "configured" ? configuredChoice?.sourceSkillId ?? value : null,
+        skillSlug: actorChoice?.slug ?? (anyLore ? configuredChoice?.slug : null),
+        skillLabel: actorChoice?.label ?? (anyLore ? configuredChoice?.label : null), anyLore, diverseLore: !!configuredChoice?.diverseLore };
       if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
     } } }
   }).render(true);
@@ -3895,6 +3914,7 @@ async function adjudicate(request) {
   request.npcId = npc.id;
   const list = request.type === "discovery" ? npc.discovery : npc.influence;
   let skill = request.skillId ? list.find((s) => s.id === request.skillId) : list.find((s) => s.slug === request.skillSlug);
+  if (skill?.anyLore && request.skillSlug) skill = { ...skill, slug: request.skillSlug, label: request.skillLabel ?? skill.label, lore: true };
   if (!skill && request.type === "discovery") {
     const secret = list.find((entry) => entry.secret);
     skill = { id: `attempt:${request.skillSlug}`, slug: request.skillSlug, label: request.skillLabel ?? request.skillSlug,
@@ -4085,7 +4105,9 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     const currentSkill = request.skillId
       ? currentSkills.find((entry) => entry.id === request.skillId)
       : currentSkills.find((entry) => entry.slug === request.skillSlug);
-    if (currentSkill) skill = currentSkill;
+    if (currentSkill) skill = request.anyLore && request.skillSlug
+      ? { ...currentSkill, slug: request.skillSlug, label: request.skillLabel ?? currentSkill.label, lore: true }
+      : currentSkill;
   }
   const actorName = participantDisplayName(encounter, actor);
   const npcName = targetDisplayName(npc);

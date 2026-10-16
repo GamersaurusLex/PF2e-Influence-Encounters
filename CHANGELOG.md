@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.6 — 2026-10-16
+
+- Fixed published Chase text imports whose `OBSTACLE` headings omit an obstacle level or include hidden PDF layout characters.
+- Imported Chase obstacles now recognize configured Fortitude, Reflex, and Will saves as the acting PC's real PF2e save statistics.
+- Interpreted published **any Lore** checks as every trained Lore possessed by the acting PC, using the encounter's configured DC.
+
 ## 0.8.5 — 2026-10-14
 
 - Made **Perception** a consistent GM-configurable option across every encounter type, including Starship activity skill lists. It uses each PC's actual Perception statistic even though PF2e and SF2e store it outside the ordinary skills collection.
