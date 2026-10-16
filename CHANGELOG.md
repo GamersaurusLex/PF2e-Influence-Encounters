@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.7 — 2026-10-16
+
+- Fixed active legacy encounters whose stale lifecycle label prevented the native sidebar **Pause** command and player check controls from working.
+- Pausing now reliably closes the tracker on every client instead of immediately reopening it through a settings refresh; **Resume** restores the active tracker.
+- Fixed player-facing Chase Overcome skill availability, including trained Lore and Esoteric Lore checks.
+- Fixed the left canvas encounter control so it opens a tracker that is not already on screen.
+- Ending an encounter now clears the active-encounter setting, preventing future stale-state conflicts.
+
 ## 0.8.6 — 2026-10-16
 
 - Fixed published Chase text imports whose `OBSTACLE` headings omit an obstacle level or include hidden PDF layout characters.

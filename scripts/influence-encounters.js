@@ -568,6 +568,15 @@ function isGeneratedPlaceholderNpc(encounter, npc) {
 }
 
 function normalizeEncounterCollections(encounter) {
+  // Encounters saved before lifecycle states were introduced still retain their
+  // active-id setting. Infer the missing state so their player actions and
+  // sidebar lifecycle controls continue to work.
+  const activeId = game.settings.get(MODULE_ID, SETTINGS.active) ?? "";
+  // The world-level active encounter setting is authoritative for pre-v0.8.6
+  // records. A stale lifecycle label must not leave an encounter visibly open
+  // while preventing its GM controls and player actions from working.
+  if (encounter.id && encounter.id === activeId && encounter.status !== "paused") encounter.status = "active";
+  else if (!["draft", "active", "paused", "complete"].includes(encounter.status)) encounter.status = "draft";
   encounter.subsystemType = ["influence", "research", "chase", "skill", "starship"].includes(encounter.subsystemType) ? encounter.subsystemType : "influence";
   if (encounter.subsystemType === "starship") {
     const savedShips = deepClone(encounter.starship?.ships ?? {});
@@ -743,7 +752,9 @@ function normalizeEncounterCollections(encounter) {
       skill.dcModified = typeof skill.dcModified === "boolean" ? skill.dcModified : skill.dcModified === "false" ? false : true;
     }
     npc.discovery.forEach((skill) => skill.secret = !!skill.secret);
-    npc.influence.forEach((skill) => skill.known = !!skill.known);
+    // Chase Overcome checks are published, player-facing options. Unlike
+    // Influence skills, they are never discoveries that need to be revealed.
+    npc.influence.forEach((skill) => skill.known = encounter.subsystemType === "chase" ? true : !!skill.known);
     npc.weakness = foundry.utils.mergeObject(deepClone(encounter.weakness ?? DEFAULT_ENCOUNTER.weakness), npc.weakness ?? {}, { inplace: false, overwrite: true });
     npc.strength = foundry.utils.mergeObject(deepClone(encounter.strength ?? DEFAULT_ENCOUNTER.strength), npc.strength ?? {}, { inplace: false, overwrite: true });
     npc.weakness.mode ??= "roll";
@@ -1589,8 +1600,8 @@ function availableSkillsForActor(actor, skills, npc = null) {
     // "Any Lore" is published shorthand for every trained Lore the acting PC has.
     if (isAnyLoreSkill(skill)) return trainedSkillChoices(actor).filter((choice) => choice.lore)
       .map((choice) => ({ ...skill, anyLore: true, id: `${skill.id}:${choice.slug}`, sourceSkillId: skill.id, slug: choice.slug, label: choice.label, lore: true }));
-    if (skill.slug === "esoteric-lore") return !!esoteric;
-    return !isLoreSkill(skill) || !!loreItemForSkill(actor, skill);
+    if (skill.slug === "esoteric-lore") return esoteric ? [skill] : [];
+    return !isLoreSkill(skill) || loreItemForSkill(actor, skill) ? [skill] : [];
   }).map((skill) => skill.slug === "esoteric-lore" ? { ...skill, diverseLore: esoteric?.diverseLore } : skill);
 }
 
@@ -2073,6 +2084,17 @@ class InfluenceTracker extends Application {
       return this.render(false);
     } else return;
     await Store.save(encounter);
+    if (action === "end-encounter") {
+      // A completed encounter must no longer be the world's active encounter;
+      // otherwise legacy state migration would correctly treat it as active on
+      // the next client load.
+      await Store.setActive("");
+      await this.close();
+      renderCinematicHud();
+      renderInfluenceSidebar();
+      game.socket.emit(SOCKET, { action: "close-encounter", encounterId: encounter.id });
+      return;
+    }
     game.socket.emit(SOCKET, { action: "refresh" });
     this.render(false);
     renderCinematicHud();
@@ -2174,7 +2196,8 @@ class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.s
     const { signal } = this._sidebarAbort;
     const panel = this.element.querySelector(".influence-sidebar-content");
     if (!panel) return;
-    if (game.user.isGM) activateEncounterDirectoryListeners(panel, signal);
+    if (!game.user.isGM) return;
+    activateEncounterDirectoryListeners(panel, signal);
   }
 
   async _onFirstRender(context, options) {
@@ -2183,44 +2206,50 @@ class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.s
   }
 
   _getEncounterContextOptions() {
-    const getEncounter = (li) => Store.get(li.closest("[data-entry-id]")?.dataset.entryId);
+    const getEncounter = (target) => {
+      const element = target?.[0] ?? target;
+      const entryId = element?.dataset?.entryId ?? element?.closest?.("[data-entry-id]")?.dataset?.entryId;
+      return entryId ? Store.get(entryId) : null;
+    };
     return [{
       label: "Edit",
       icon: "fa-solid fa-pen",
-      onClick: (_event, li) => new EncounterEditor(getEncounter(li)).render({ force: true })
+      onClick: (_event, target) => new EncounterEditor(getEncounter(target)).render({ force: true })
     }, {
       label: "Resume",
       icon: "fa-solid fa-play",
-      visible: (li) => getEncounter(li)?.status === "paused",
-      onClick: (_event, li) => resumeEncounter(getEncounter(li).id)
+      visible: (target) => getEncounter(target)?.status === "paused",
+      onClick: (_event, target) => resumeEncounter(getEncounter(target).id)
     }, {
       label: "Pause",
       icon: "fa-solid fa-pause",
-      visible: (li) => {
-        const encounter = getEncounter(li);
-        return encounter?.status === "active" && encounter.id === Store.activeId();
+      visible: (target) => {
+        const encounter = getEncounter(target);
+        // Older saved encounters predate the explicit status field. Their
+        // active setting remains authoritative unless they are paused.
+        return !!encounter && encounter.id === Store.activeId() && encounter.status !== "paused";
       },
-      onClick: (_event, li) => pauseEncounter(getEncounter(li).id)
+      onClick: (_event, target) => pauseEncounter(getEncounter(target).id)
     }, {
       label: "Activate",
       icon: "fa-solid fa-play",
-      visible: (li) => {
-        const encounter = getEncounter(li);
-        return encounter?.status !== "paused" && encounter?.id !== Store.activeId();
+      visible: (target) => {
+        const encounter = getEncounter(target);
+        return !!encounter && encounter.status !== "paused" && encounter.id !== Store.activeId();
       },
-      onClick: (_event, li) => activateEncounter(getEncounter(li).id)
+      onClick: (_event, target) => activateEncounter(getEncounter(target).id)
     }, {
       label: "Duplicate as New Draft",
       icon: "fa-solid fa-copy",
-      onClick: (_event, li) => duplicateEncounter(getEncounter(li).id)
+      onClick: (_event, target) => duplicateEncounter(getEncounter(target).id)
     }, {
       label: "Move to Folder",
       icon: "fa-solid fa-folder-tree",
-      onClick: (event, li) => promptEncounterFolderMove(event, getEncounter(li).id)
+      onClick: (event, target) => promptEncounterFolderMove(event, getEncounter(target).id)
     }, {
       label: "Export Data",
       icon: "fa-solid fa-file-export",
-      onClick: (_event, li) => exportEncounterData(getEncounter(li).id)
+      onClick: (_event, target) => exportEncounterData(getEncounter(target).id)
     }, {
       label: "Import Data",
       icon: "fa-solid fa-file-import",
@@ -2228,7 +2257,7 @@ class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.s
     }, {
       label: "Delete",
       icon: "fa-solid fa-trash",
-      onClick: (_event, li) => deleteEncounter(getEncounter(li).id)
+      onClick: (_event, target) => deleteEncounter(getEncounter(target).id)
     }];
   }
 
@@ -4407,6 +4436,12 @@ function renderTracker(force = true) {
   tracker.options.title = Store.get()?.subsystemType === "starship" ? "Starship Encounter" : "Influence Encounter";
   return tracker.render(force);
 }
+
+function refreshTrackerForEncounterState() {
+  const encounter = Store.get();
+  if (encounter?.status === "active") return tracker?.render(false);
+  return tracker?.close();
+}
 Hooks.once("init", () => {
   CONFIG.ui.influenceEncounters = InfluenceSidebar;
   const sidebarTabs = CONFIG.ui.sidebar.TABS;
@@ -4471,7 +4506,7 @@ Hooks.once("ready", async () => {
       if (encounter?.chaseOutcome === "victory") showVictorySplash(encounter);
     }
     if (payload.action === "refresh" && (!payload.userId || payload.userId === game.user.id)) {
-      tracker?.render(false);
+      refreshTrackerForEncounterState();
       renderCinematicHud();
       renderInfluenceSidebar();
     }
@@ -4500,7 +4535,7 @@ Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); 
 Hooks.on("updateSetting", (setting) => {
   if (setting.namespace !== MODULE_ID || ![SETTINGS.encounters, SETTINGS.active].includes(setting.key)) return;
   renderInfluenceSidebar();
-  tracker?.render(false);
+  refreshTrackerForEncounterState();
   renderCinematicHud();
 });
 
@@ -4514,7 +4549,9 @@ Hooks.on("getSceneControlButtons", (controls) => {
     order: Object.keys(tokenTools).length,
     button: true,
     visible: true,
-    onChange: () => tracker?.render(false)
+    // A scene-control button is an entry point, not merely a repaint hint.
+    // `render(false)` is a no-op when the tracker has not already been opened.
+    onChange: () => renderTracker(true)
   };
 });
 
