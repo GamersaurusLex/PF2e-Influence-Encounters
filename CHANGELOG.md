@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.9 — 2026-10-21
+
+- Added an Influence-only **Threshold Outcomes** policy. GMs can now keep earned boons, consequences, and threshold text hidden from players until the encounter ends.
+- Hidden-outcome encounters continue to show Influence Point changes, while reward cards and player check-log reward details remain GM-only.
+- Added the GM-only, confirmed **Reveal Outcomes Now** control for an active or paused Influence encounter, along with a player-facing outcome summary card.
+- Ending a hidden-outcome Influence encounter now reveals its final results through the published Journal record and a final chat summary.
+- Player clients can keep their own Influence-target selection and see their personal PC/target cinematic pairing, while the GM retains the shared adjudication spotlight.
+
 ## 0.8.8 — 2026-10-21
 
 - Fixed encounter-directory folders: the native-style folder header is now a real control, collapsed folders actually hide their contents, and drag targets are delegated safely across directory rerenders.

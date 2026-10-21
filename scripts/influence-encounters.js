@@ -802,6 +802,8 @@ function normalizeEncounterCollections(encounter) {
   encounter.backgroundImage ??= "";
   encounter.backgroundBlur ??= 6;
   encounter.presentationVisible ??= true;
+  encounter.revealInfluenceRewardsDuringEncounter = encounter.revealInfluenceRewardsDuringEncounter !== false;
+  encounter.influenceRewardsManuallyRevealed = !!encounter.influenceRewardsManuallyRevealed;
   encounter.journalId ??= "";
   encounter.endedAt ??= null;
   encounter.folderId ??= "";
@@ -867,6 +869,8 @@ const DEFAULT_ENCOUNTER = {
   chaseDescription: "",
   chaseSubject: { name: "Chase Objective", nickname: "", image: "icons/svg/mystery-man.svg", label: "Quarry", actorId: "" },
   publicPoints: true,
+  revealInfluenceRewardsDuringEncounter: true,
+  influenceRewardsManuallyRevealed: false,
   status: "draft",
   discovery: [
     { id: "perception", label: "Perception", slug: "perception", dc: 14, dcModified: false, secret: false },
@@ -1308,6 +1312,26 @@ function influenceRewardSections(thresholds) {
   }).join("");
 }
 
+function influenceRewardsAreVisible(encounter) {
+  return encounter?.subsystemType !== "influence"
+    || encounter.revealInfluenceRewardsDuringEncounter !== false
+    || !!encounter.influenceRewardsManuallyRevealed
+    || encounter.status === "complete";
+}
+
+async function announceInfluenceRewards(encounter, heading = "Influence Outcomes") {
+  const sections = encounter.npcs.map((npc) => {
+    const reached = npc.thresholds.filter((threshold) => npc.points >= threshold.points);
+    return reached.length ? `<section><h3>${esc(targetDisplayName(npc))}</h3>${influenceRewardSections(reached)}</section>` : "";
+  }).join("");
+  if (!sections) return;
+  await ChatMessage.create({
+    content: `<div class="influence-chat influence-result influence-reward"><strong>${esc(heading)}</strong>${sections}</div>`,
+    style: CONST.CHAT_MESSAGE_STYLES.OOC,
+    flags: { [MODULE_ID]: { messageKind: "result" } }
+  });
+}
+
 async function actorFromDropEvent(event) {
   let data = {};
   try {
@@ -1555,10 +1579,11 @@ function encounterViewSelection(encounter) {
       ?? owned.find((actor) => !encounter.actorsActed?.[actor.id])?.id
       ?? (owned.some((actor) => actor.id === saved.actorId) ? saved.actorId : owned[0]?.id ?? "");
   const selectableNpcs = encounter.npcs.filter((npc) => npc.availability !== "hidden");
+  const savedNpcId = saved.npcIdsByActor?.[actorId] ?? saved.npcId;
   const npcId = encounter.subsystemType === "chase"
     ? encounter.activeNpcId
-    : selectableNpcs.some((npc) => npc.id === saved.npcId)
-    ? saved.npcId
+    : selectableNpcs.some((npc) => npc.id === savedNpcId)
+    ? savedNpcId
     : selectableNpcs.some((npc) => npc.id === encounter.activeNpcId) ? encounter.activeNpcId : selectableNpcs[0]?.id ?? "";
   return {
     actorId, npcId,
@@ -1570,7 +1595,14 @@ function encounterViewSelection(encounter) {
 
 async function setEncounterViewSelection(encounter, changes) {
   const selections = deepClone(game.settings.get(MODULE_ID, SETTINGS.selections) ?? {});
-  selections[encounter.id] = { ...encounterViewSelection(encounter), ...changes };
+  const current = encounterViewSelection(encounter);
+  const saved = selections[encounter.id] ?? {};
+  const next = { ...saved, ...current, ...changes };
+  if (!game.user.isGM && changes.npcId) {
+    const actorId = changes.actorId ?? current.actorId;
+    next.npcIdsByActor = { ...(saved.npcIdsByActor ?? {}), [actorId]: changes.npcId };
+  }
+  selections[encounter.id] = next;
   await game.settings.set(MODULE_ID, SETTINGS.selections, selections);
 }
 
@@ -1786,10 +1818,16 @@ class InfluenceTracker extends Application {
     const activeResearchState = isResearch && activeNpcRecord && selection.actorId ? researchActorState(activeNpcRecord, selection.actorId) : null;
     const activeNpc = activeNpcRecord ? { ...activeNpcRecord, name: targetDisplayName(activeNpcRecord), researchActorState: activeResearchState } : null;
     const thresholdSource = isResearch ? (encounter?.researchThresholds ?? []) : (isChase || isSkill) ? [] : (activeNpcRecord?.thresholds ?? []);
+    const showInfluenceRewards = game.user.isGM || influenceRewardsAreVisible(encounter);
+    const tableRequest = !game.user.isGM && encounter?.subsystemType === "influence" ? encounter.pendingChecks?.[0] : null;
+    const tableSpotlight = tableRequest ? {
+      actorName: participantDisplayName(encounter, game.actors.get(tableRequest.actorId)),
+      npcName: targetDisplayName(encounter.npcs.find((npc) => npc.id === tableRequest.npcId))
+    } : null;
     const individualSkillScoring = isSkill && encounter.skillScoringMode === "individual";
     const goalBasedSkillEncounter = isSkill && encounter.skillVictoryMode === "goal";
     const currentPoints = isResearch ? Number(encounter?.researchPoints) : isSkill ? (individualSkillScoring ? skillActorPoints(encounter, selection.actorId) : Number(encounter?.skillPoints)) : Number(activeNpcRecord?.points);
-    const thresholds = thresholdSource.map((threshold) => ({
+    const thresholds = (showInfluenceRewards ? thresholdSource : []).map((threshold) => ({
       ...threshold,
       unlocked: currentPoints >= threshold.points,
       boons: threshold.boons.filter((boon) => game.user.isGM || boon.playerVisible)
@@ -1799,7 +1837,7 @@ class InfluenceTracker extends Application {
     const checkLog = [...(encounter?.checkLog ?? [])].reverse().map((entry) => ({ ...entry,
       typeLabel: entry.type === "research" ? "Research" : entry.type === "chase" ? "Chase" : entry.type === "skill" ? "Skill" : entry.type === "discovery" ? "Discovery" : "Influence",
       pendingDiscovery: pendingByLog.get(entry.id),
-      details: entry.type === "discovery" ? (entry.details ?? []).map(concealDiscoveryDC) : (entry.details ?? []),
+      details: !showInfluenceRewards && entry.type === "influence" ? [] : entry.type === "discovery" ? (entry.details ?? []).map(concealDiscoveryDC) : (entry.details ?? []),
       displayOutcome: !game.user.isGM && (entry.type === "discovery" || entry.outcome.includes("Invalid Influence Skill"))
         ? (entry.outcome.includes("Invalid") ? "Failure" : entry.outcome.startsWith("Critical Success") ? "Critical Success" : entry.outcome.startsWith("Success") ? "Success" : "Failure")
         : entry.outcome
@@ -1823,7 +1861,7 @@ class InfluenceTracker extends Application {
     const overcomeChecks = (isChase || isSkill) ? visibleChecks : [];
     const researchChecks = isResearch && (game.user.isGM || encounter.showResearchSkills) ? visibleChecks : [];
     const sourceAvailable = isChase ? activeNpc?.availability !== "exhausted" : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus,
+    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight,
       researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
       pointLabel: isResearch ? "RP" : isChase ? "CP" : isSkill ? "SP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : isSkill ? "Skill Challenges" : "Influence Targets",
       actionLabel: isResearch ? "Research" : (isChase || isSkill) ? "Make a Check" : "Influence", currentPoints,
@@ -1839,6 +1877,7 @@ class InfluenceTracker extends Application {
       canOpenForPlayers: game.user.isGM && encounter?.status === "active",
       canAct: !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !encounter.skillOutcome && !!selection.actorId && sourceAvailable,
       canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused",
+      canRevealInfluenceRewards: game.user.isGM && encounter?.subsystemType === "influence" && ["active", "paused"].includes(encounter.status) && !influenceRewardsAreVisible(encounter),
       canTriggerVictorySplash: game.user.isGM && isChase && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual",
       canDeclareSkillOutcome: game.user.isGM && isSkill && encounter?.skillVictoryMode === "gm" && encounter?.status === "active" && !encounter?.skillOutcome,
       canDeclareChaseOutcome: game.user.isGM && isChase && encounter?.status === "active" && !encounter?.chaseOutcome,
@@ -1898,6 +1937,7 @@ class InfluenceTracker extends Application {
         await setEncounterViewSelection(encounter, { actorId });
         this.render(false);
         renderInfluenceSidebar();
+        renderCinematicHud();
       }
       return;
     }
@@ -1920,6 +1960,7 @@ class InfluenceTracker extends Application {
       return requestCheck(encounter, event.currentTarget.dataset.type, selection.actorId, selection.npcId);
     }
     if (!game.user.isGM) return ui.notifications.warn(game.i18n.localize("INFLUENCE.GMOnly"));
+    let announceInfluenceRewardsAfterSave = false;
     if (action === "adjudicate-request") {
       const request = encounter.pendingChecks.find((entry) => entry.id === event.currentTarget.dataset.id);
       return request ? adjudicate(request) : ui.notifications.warn("That queued check is no longer available.");
@@ -1929,7 +1970,13 @@ class InfluenceTracker extends Application {
     if (action === "pause") return pauseEncounter(encounter.id);
     if (action === "resume") return resumeEncounter(encounter.id);
     if (action === "victory-splash") return triggerVictorySplash(encounter);
-    if (action === "undo") {
+    if (action === "reveal-influence-rewards") {
+      if (encounter.subsystemType !== "influence" || influenceRewardsAreVisible(encounter)) return;
+      if (!await foundry.applications.api.DialogV2.confirm({ window: { title: "Reveal Influence Outcomes" }, content: "<p>Reveal all earned Influence outcomes to players now? This cannot be hidden again for players.</p>" })) return;
+      snapshot(encounter, "Reveal Influence Outcomes");
+      encounter.influenceRewardsManuallyRevealed = true;
+      announceInfluenceRewardsAfterSave = true;
+    } else if (action === "undo") {
       let entry = encounter.history.pop();
       while (entry?.label === "undo") entry = encounter.history.pop();
       if (!entry) return ui.notifications.info("Nothing to undo.");
@@ -2088,6 +2135,7 @@ class InfluenceTracker extends Application {
       await ChatMessage.create({ content: `<div class="influence-chat influence-result ${outcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${outcome === "victory" ? "Skill Encounter Outcome" : "Skill Encounter Failed"}</strong><p>${esc(outcome === "victory" ? (encounter.victoryText || "The GM determined the outcome.") : (encounter.failureText || "The GM determined the encounter was unsuccessful."))}</p>${encounter.skillScoringMode === "individual" ? `<p>${esc(skillScoreSummary(encounter))}</p>` : ""}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
     } else if (action === "end-encounter") {
       if (!await foundry.applications.api.DialogV2.confirm({ window: { title: "End Encounter" }, content: "<p>End this encounter and make its Journal record available to players?</p>" })) return;
+      announceInfluenceRewardsAfterSave = encounter.subsystemType === "influence" && !influenceRewardsAreVisible(encounter);
       snapshot(encounter, action);
       encounter.status = "complete";
       encounter.endedAt = Date.now();
@@ -2104,6 +2152,7 @@ class InfluenceTracker extends Application {
       return this.render(false);
     } else return;
     await Store.save(encounter);
+    if (announceInfluenceRewardsAfterSave) await announceInfluenceRewards(encounter, action === "end-encounter" ? "Final Influence Outcomes" : "Influence Outcomes Revealed");
     if (action === "end-encounter") {
       // A completed encounter must no longer be the world's active encounter;
       // otherwise legacy state migration would correctly treat it as active on
@@ -2137,11 +2186,13 @@ function renderCinematicHud() {
     hud.innerHTML = "";
     return;
   }
-  const actor = game.actors.get(encounter.activeActorId);
-  // Research sources are individually selectable on player clients, so each
-  // viewer sees the location associated with the source they are reviewing.
-  const selectedNpcId = encounter.subsystemType === "research"
-    ? encounterViewSelection(encounter).npcId
+  const selection = encounterViewSelection(encounter);
+  const personalInfluenceView = !game.user.isGM && encounter.subsystemType === "influence";
+  const actor = game.actors.get(personalInfluenceView ? selection.actorId : encounter.activeActorId);
+  // Player clients use their own selected source for Research and their own
+  // PC/target pair for Influence. The GM keeps the shared adjudication view.
+  const selectedNpcId = personalInfluenceView || encounter.subsystemType === "research"
+    ? selection.npcId
     : encounter.activeNpcId;
   const npc = encounter.npcs.find((entry) => entry.id === selectedNpcId) ?? encounter.npcs[0];
   const actorName = participantDisplayName(encounter, actor);
@@ -2793,7 +2844,7 @@ async function duplicateEncounter(id) {
     opponentPosition: source.subsystemType === "chase" ? source.subjectStartPosition : source.opponentPosition,
     activeActorId: "", actorsActed: {}, phaseActions: {}, discoveries: {},
     activeEffects: ["chase", "skill"].includes(source.subsystemType) ? deepClone(source.activeEffects) : [], checkLog: [], pendingDiscoveries: [], pendingChecks: [], history: [], journalId: "", endedAt: null,
-    presentationVisible: true
+    presentationVisible: true, influenceRewardsManuallyRevealed: false
   });
   duplicate.npcs.forEach((npc) => {
     npc.points = 0;
@@ -2866,7 +2917,7 @@ function importEncounterData() {
         currentPhase: 1, currentRound: 1, points: 0, researchPoints: 0, skillPoints: 0, skillPointsByActor: {},
         chaseOutcome: "", skillOutcome: "", skillWinnerActorId: "", participantIds: imported.subsystemType === "starship" ? imported.participantIds : null, activeActorId: "", actorsActed: {}, phaseActions: {},
         discoveries: {}, activeEffects: [], checkLog: [], history: [], journalId: "",
-        endedAt: null, presentationVisible: true
+        endedAt: null, presentationVisible: true, influenceRewardsManuallyRevealed: false
       });
       if (imported.subsystemType === "starship") {
         imported.starship.stage = "role-selection";
@@ -2954,6 +3005,7 @@ async function handleSidebarAction(event) {
     await setEncounterViewSelection(encounter, { actorId: actor.id });
     renderInfluenceSidebar();
     tracker?.render(false);
+    renderCinematicHud();
     return;
   }
   const selection = encounterViewSelection(encounter);
@@ -3414,6 +3466,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
     this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
     this.encounter.showResearchSkills = this.element.querySelector('[name="showResearchSkills"]')?.checked ?? this.encounter.showResearchSkills;
+    this.encounter.revealInfluenceRewardsDuringEncounter = this.element.querySelector('[name="revealInfluenceRewardsDuringEncounter"]')?.checked ?? this.encounter.revealInfluenceRewardsDuringEncounter;
     this.encounter.participantIds = [...this.element.querySelectorAll('[name="partyParticipant"]:checked')].map((input) => input.value);
     for (const input of this.element.querySelectorAll('[name^="participantNicknames."]')) {
       this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
@@ -3559,6 +3612,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       this.encounter.progressClock.enabled = this.element.querySelector('[name="progressClock.enabled"]')?.checked ?? false;
       this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
       this.encounter.showResearchSkills = this.element.querySelector('[name="showResearchSkills"]')?.checked ?? this.encounter.showResearchSkills;
+      this.encounter.revealInfluenceRewardsDuringEncounter = this.element.querySelector('[name="revealInfluenceRewardsDuringEncounter"]')?.checked ?? this.encounter.revealInfluenceRewardsDuringEncounter;
       this.encounter.participantIds = [...this.element.querySelectorAll('[name="partyParticipant"]:checked')].map((input) => input.value);
       for (const input of this.element.querySelectorAll('[name^="participantNicknames."]')) {
         this.encounter.participantNicknames[input.name.slice("participantNicknames.".length)] = input.value.trim();
@@ -4337,7 +4391,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   for (const canceled of canceledChaseRequests) await notifyPendingCheck(canceled, `${npcName} was overcome before this queued check could be adjudicated.`);
   for (const canceled of canceledSkillRequests) await notifyPendingCheck(canceled, "The party reached the Skill Point goal before this queued check could be adjudicated.");
   if (chaseWonNow && encounter.victorySplashMode === "automatic") triggerVictorySplash(encounter);
-  if (newlyReachedInfluenceThresholds.length) {
+  if (newlyReachedInfluenceThresholds.length && influenceRewardsAreVisible(encounter)) {
     const rewards = influenceRewardSections(newlyReachedInfluenceThresholds);
     await ChatMessage.create({
       content: `<div class="influence-chat influence-result influence-reward"><strong>Reward Earned — ${esc(npcName)}</strong>${rewards}</div>`,
@@ -4345,7 +4399,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
       flags: { [MODULE_ID]: { messageKind: "result" } }
     });
   }
-  if (newlyLostInfluenceThresholds.length) {
+  if (newlyLostInfluenceThresholds.length && influenceRewardsAreVisible(encounter)) {
     await ChatMessage.create({
       content: `<div class="influence-chat influence-result influence-reward-lost"><strong>Reward Lost — ${esc(npcName)}</strong><p>The party's Influence fell below a reward threshold.</p>${influenceRewardSections(newlyLostInfluenceThresholds)}</div>`,
       style: CONST.CHAT_MESSAGE_STYLES.OOC,

@@ -6,6 +6,8 @@
 .encounter-header img, .encounter-row img { width: 72px; height: 72px; object-fit: cover; border: 0; border-radius: 6px; }
 .encounter-header h2, .encounter-row h3 { margin: 0; }
 .points { font-size: 1.6rem; font-weight: 700; }
+.influence-table-status { margin: .55rem 0 -.1rem; color: var(--color-text-secondary); font-size: .9rem; }
+.influence-table-status i { margin-right: .3rem; color: var(--color-warm-1); }
 .threshold-track { display: flex; gap: .4rem; margin: 1rem 0; }
 .tracker-tabs { display: flex; gap: .5rem; border-bottom: 1px solid var(--color-border-light-2); margin: .75rem 0; }
 .tracker-tabs .item { padding: .45rem .65rem; }
