@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.8 — 2026-10-21
+
+- Fixed encounter-directory folders: the native-style folder header is now a real control, collapsed folders actually hide their contents, and drag targets are delegated safely across directory rerenders.
+- Calculated Starship victories and defeats now lock out further crew actions, announce the result in chat, and offer the GM **End & Publish** to finish the encounter and create its Journal record.
+- Starship Journal records are correctly titled **Starship Encounter** rather than **Influence**.
+
 ## 0.8.7 — 2026-10-16
 
 - Fixed active legacy encounters whose stale lifecycle label prevented the native sidebar **Pause** command and player check controls from working.

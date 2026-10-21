@@ -176,6 +176,12 @@
 .influence-sidebar-encounter .document-name { width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
 .influence-sidebar-encounter.active { background: color-mix(in srgb, var(--color-warm-2, #9f6b3f) 30%, transparent); }
 .influence-active-marker { color: var(--color-warm-1, #ee9b3a); text-align: center; }
+.influence-folder .folder-header { display: flex; align-items: center; gap: .25rem; }
+.influence-folder .folder-toggle { display: flex; align-items: center; flex: 1; min-width: 0; gap: .35rem; margin: 0; padding: .25rem .35rem; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.influence-folder .folder-toggle:hover { text-shadow: 0 0 6px var(--color-shadow-primary, #000); }
+.influence-folder:not(.expanded) > .subdirectory { display: none; }
+.starship-outcome { margin: 1rem 0; border-left: 4px solid var(--color-warm-1, #ee9b3a); }
+.starship-outcome h3 { margin: 0 0 .25rem; text-transform: capitalize; }
 .influence-folder.droptarget > .folder-header { outline: 2px solid var(--color-border-highlight); outline-offset: -2px; }
 .influence-context-menu { position: fixed; z-index: 1000; display: grid; min-width: 170px; padding: .3rem; border: 1px solid var(--color-border-light-2); border-radius: 5px; background: var(--color-cool-5, #252830); box-shadow: 0 4px 14px #000a; }
 .influence-context-menu button { display: flex; align-items: center; justify-content: flex-start; gap: .55rem; width: 100%; margin: 0; padding: .45rem .6rem; border: 0; background: transparent; color: var(--color-text-light-highlight, #f0f0e0); text-align: left; }

@@ -293,6 +293,20 @@ function updateStarshipCalculatedOutcome(encounter) {
   return encounter.starship.outcome;
 }
 
+async function announceStarshipOutcome(encounter, priorOutcome = "") {
+  const outcome = encounter?.starship?.outcome || "";
+  if (!outcome || outcome === priorOutcome) return;
+  const hostile = starshipShip(encounter.starship, "hostile")?.name || "the enemy ship";
+  const message = outcome === "victory"
+    ? (encounter.victoryText || `${hostile} has been defeated.`)
+    : (encounter.failureText || "The crew's objective was not achieved.");
+  await ChatMessage.create({
+    content: `<div class="influence-chat influence-result ${outcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${outcome === "victory" ? "Starship Victory" : "Starship Defeat"}</strong><p>${esc(message)}</p></div>`,
+    style: CONST.CHAT_MESSAGE_STYLES.OOC,
+    flags: { [MODULE_ID]: { messageKind: "result" } }
+  });
+}
+
 function starshipTrackerContext(encounter) {
   const participants = encounterParticipants(encounter);
   const selection = encounterViewSelection(encounter);
@@ -348,7 +362,7 @@ function starshipTrackerContext(encounter) {
     return { ...request, position: index + 1, actorName: actor ? participantDisplayName(encounter, actor) : "Missing PC", npcName: hostileShip?.name ?? "Hostile ship", skillLabel: request.skillLabel ?? "Unknown statistic", activityLabel: activity?.label ?? "Starship action" };
   }) : [];
   return {
-    encounter, starship: { ...starship, countdown: clock, outcome: starshipOutcome }, starshipOutcome, isStarship: true, isGM: game.user.isGM, noEncounter: false, isPaused: encounter.status === "paused",
+    encounter, starship: { ...starship, countdown: clock, outcome: starshipOutcome }, starshipOutcome, starshipVictory: starshipOutcome === "victory", isStarship: true, isGM: game.user.isGM, noEncounter: false, isPaused: encounter.status === "paused",
     primorata: starshipShipContext(friendlyShip),
     heart: starshipShipContext(hostileShip),
     actors: participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter.actorsActed?.[actor.id], roleLabel: starshipRole(encounter, starship.roleSelections[actor.id])?.label ?? "Unassigned" })),
@@ -359,6 +373,7 @@ function starshipTrackerContext(encounter) {
     canTakeStarshipAction: encounter.status === "active" && starship.stage === "actions" && !!selectedActor && !!selectedRole && !!selectedActionId && !!selectedSkillSlug && !encounter.actorsActed?.[selectedActor.id] && !finished,
     canNextStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "actions" && !encounter.pendingChecks?.length && !finished,
     canPause: game.user.isGM && encounter.status === "active", canResume: game.user.isGM && encounter.status === "paused", canOpenForPlayers: game.user.isGM && encounter.status === "active",
+    canEndEncounter: game.user.isGM && encounter.status === "active" && !!starshipOutcome,
     hasStarshipClock: clock.enabled,
     canDeclareStarshipOutcome: game.user.isGM && encounter.status === "active" && starship.victoryMode === "gm" && !starshipOutcome
   };
@@ -1347,7 +1362,12 @@ function publicEncounterHtml(encounter) {
 }
 
 function encounterJournalName(encounter) {
-  return `${encounter.subsystemType === "research" ? "Research" : encounter.subsystemType === "chase" ? "Chase" : encounter.subsystemType === "skill" ? "Skill Encounter" : "Influence"}: ${encounter.name}${encounter.status === "paused" ? " (Paused)" : ""}`;
+  const type = encounter.subsystemType === "research" ? "Research"
+    : encounter.subsystemType === "chase" ? "Chase"
+      : encounter.subsystemType === "skill" ? "Skill Encounter"
+        : encounter.subsystemType === "starship" ? "Starship Encounter"
+          : "Influence";
+  return `${type}: ${encounter.name}${encounter.status === "paused" ? " (Paused)" : ""}`;
 }
 
 async function syncEncounterJournal(encounter) {
@@ -2067,7 +2087,7 @@ class InfluenceTracker extends Application {
       encounter.skillWinnerActorId = "";
       await ChatMessage.create({ content: `<div class="influence-chat influence-result ${outcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${outcome === "victory" ? "Skill Encounter Outcome" : "Skill Encounter Failed"}</strong><p>${esc(outcome === "victory" ? (encounter.victoryText || "The GM determined the outcome.") : (encounter.failureText || "The GM determined the encounter was unsuccessful."))}</p>${encounter.skillScoringMode === "individual" ? `<p>${esc(skillScoreSummary(encounter))}</p>` : ""}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
     } else if (action === "end-encounter") {
-      if (!await Dialog.confirm({ title: "End Encounter", content: "<p>End this encounter and make its Journal record available to players?</p>" })) return;
+      if (!await foundry.applications.api.DialogV2.confirm({ window: { title: "End Encounter" }, content: "<p>End this encounter and make its Journal record available to players?</p>" })) return;
       snapshot(encounter, action);
       encounter.status = "complete";
       encounter.endedAt = Date.now();
@@ -2341,14 +2361,16 @@ function renderEncounterDirectory() {
     const expanded = query || !collapsedInfluenceFolders.has(folder.id);
     const colorStyle = folder.color ? ` style="background-color:${esc(folder.color)}"` : "";
     const borderStyle = folder.color ? ` style="border-left-color:${esc(folder.color)}"` : "";
-    return `<li class="directory-item folder flexcol influence-folder ${expanded ? "expanded" : ""}" data-folder-id="${folder.id}"><header class="folder-header" data-action="toggle-folder" data-folder-id="${folder.id}"${colorStyle}><i class="fa-solid fa-folder-open fa-fw" inert></i><span class="folder-name ellipsis">${esc(folder.name)}</span><button type="button" class="create-button create-entry icon icon-plus fa-solid fa-comments" data-action="new-encounter" data-folder-id="${folder.id}" data-tooltip aria-label="Create Encounter"></button></header><ol class="subdirectory plain"${borderStyle}>${children.map(encounterDirectoryEntry).join("")}</ol></li>`;
+    return `<li class="directory-item folder flexcol influence-folder ${expanded ? "expanded" : ""}" data-folder-id="${folder.id}"><header class="folder-header"${colorStyle}><button type="button" class="folder-toggle" data-action="toggle-folder" data-folder-id="${folder.id}" aria-expanded="${expanded}" aria-label="${expanded ? "Collapse" : "Expand"} ${esc(folder.name)}"><i class="fa-solid fa-folder-${expanded ? "open" : "closed"} fa-fw" inert></i><span class="folder-name ellipsis">${esc(folder.name)}</span></button><button type="button" class="create-button create-entry icon icon-plus fa-solid fa-comments" data-action="new-encounter" data-folder-id="${folder.id}" data-tooltip aria-label="Create Encounter"></button></header><ol class="subdirectory plain"${borderStyle}>${children.map(encounterDirectoryEntry).join("")}</ol></li>`;
   }).join("");
   return `<header class="directory-header"><div class="header-actions action-buttons flexrow"><button type="button" data-action="new-encounter"><i class="fa-solid fa-file-circle-plus"></i> Create Encounter</button><button type="button" data-action="new-folder"><i class="fa-solid fa-folder-plus"></i> Create Folder</button></div><search class="directory-search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" name="search" value="${esc(influenceSidebarSearch)}" autocomplete="off" placeholder="Search Encounters"><button type="button" class="inline-control icon fa-solid fa-xmark" data-action="clear-search" aria-label="Clear Search"></button></search></header><ol class="directory-list plain">${rootEntries.sort((a, b) => a.name.localeCompare(b.name)).map(encounterDirectoryEntry).join("")}${folderHtml}${!encounters.length && !folders.length ? '<li class="directory-item"><p class="hint">No influence encounters found.</p></li>' : ""}</ol>`;
 }
 
 function activateEncounterDirectoryListeners(panel, signal) {
-  const isEncounterDrag = (event) => Array.from(event.dataTransfer?.types ?? []).some((type) => ["application/x-influence-encounter", "text/plain"].includes(type));
-  const encounterDragId = (event) => event.dataTransfer?.getData("application/x-influence-encounter") || event.dataTransfer?.getData("text/plain");
+  const encounterDragType = "application/x-influence-encounter";
+  const isEncounterDrag = (event) => Array.from(event.dataTransfer?.types ?? []).includes(encounterDragType);
+  const encounterDragId = (event) => event.dataTransfer?.getData(encounterDragType);
+  const root = panel.querySelector(":scope > .directory-list");
   const search = panel.querySelector('.directory-search input[name="search"]');
   search?.addEventListener("input", () => {
     influenceSidebarSearch = search.value;
@@ -2362,46 +2384,47 @@ function activateEncounterDirectoryListeners(panel, signal) {
       folder.hidden = !!query && !folderMatches && !childMatches;
     });
   }, { signal });
-  panel.querySelectorAll(".influence-sidebar-encounter").forEach((entry) => {
-    entry.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("application/x-influence-encounter", entry.dataset.entryId);
-      event.dataTransfer.setData("text/plain", entry.dataset.entryId);
-      event.dataTransfer.effectAllowed = "move";
-    }, { signal });
-  });
-  panel.querySelectorAll(".influence-folder").forEach((folder) => {
-    const header = folder.querySelector(".folder-header");
-    header?.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      showFolderContextMenu(event, folder.dataset.folderId);
-    }, { signal });
-    folder.addEventListener("dragover", (event) => {
-      if (!isEncounterDrag(event)) return;
-      event.preventDefault();
-      folder.classList.add("droptarget");
-    }, { signal });
-    folder.addEventListener("dragleave", () => folder.classList.remove("droptarget"), { signal });
-    folder.addEventListener("drop", async (event) => {
-      const id = encounterDragId(event);
-      if (!id) return;
-      event.preventDefault();
-      event.stopPropagation();
-      folder.classList.remove("droptarget");
-      await moveEncounterToFolder(id, folder.dataset.folderId);
-    }, { signal });
-  });
-  const root = panel.querySelector(":scope > .directory-list");
-  root?.addEventListener("dragover", (event) => {
-    if (event.target.closest(".influence-folder") || !isEncounterDrag(event)) return;
-    event.preventDefault();
+  // Delegate from the V2 sidebar root. Re-rendering the sidebar no longer
+  // leaves individual folder or encounter listeners attached to stale nodes.
+  panel.addEventListener("dragstart", (event) => {
+    const entry = event.target.closest(".influence-sidebar-encounter");
+    if (!entry || !event.dataTransfer) return;
+    event.dataTransfer.setData(encounterDragType, entry.dataset.entryId);
+    event.dataTransfer.setData("text/plain", entry.dataset.entryId);
+    event.dataTransfer.effectAllowed = "move";
   }, { signal });
-  root?.addEventListener("drop", async (event) => {
-    if (event.target.closest(".influence-folder")) return;
+  panel.addEventListener("contextmenu", (event) => {
+    const header = event.target.closest(".influence-folder > .folder-header");
+    if (!header) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showFolderContextMenu(event, header.closest(".influence-folder")?.dataset.folderId);
+  }, { signal });
+  panel.addEventListener("dragover", (event) => {
+    if (!isEncounterDrag(event)) return;
+    const folder = event.target.closest(".influence-folder");
+    const isRootDrop = !!root?.contains(event.target);
+    if (!folder && !isRootDrop) return;
+    event.preventDefault();
+    folder?.classList.add("droptarget");
+    event.dataTransfer.dropEffect = "move";
+  }, { signal });
+  panel.addEventListener("dragleave", (event) => {
+    const folder = event.target.closest(".influence-folder");
+    if (folder && !folder.contains(event.relatedTarget)) folder.classList.remove("droptarget");
+  }, { signal });
+  panel.addEventListener("dragend", () => panel.querySelectorAll(".influence-folder.droptarget").forEach((folder) => folder.classList.remove("droptarget")), { signal });
+  panel.addEventListener("drop", async (event) => {
+    if (!isEncounterDrag(event)) return;
+    const folder = event.target.closest(".influence-folder");
+    const isRootDrop = !!root?.contains(event.target);
+    if (!folder && !isRootDrop) return;
+    event.preventDefault();
+    event.stopPropagation();
     const id = encounterDragId(event);
     if (!id) return;
-    event.preventDefault();
-    await moveEncounterToFolder(id, "");
+    panel.querySelectorAll(".influence-folder.droptarget").forEach((target) => target.classList.remove("droptarget"));
+    await moveEncounterToFolder(id, folder?.dataset.folderId || "");
   }, { signal });
 }
 
@@ -3528,6 +3551,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   async _save(formData) {
     try {
       const priorActiveState = this.encounter.id ? Store.get(this.encounter.id) : null;
+      const priorStarshipOutcome = this.encounter.starship?.outcome || "";
       this._mergeFormData(formData);
       normalizeEncounterCollections(this.encounter);
       if (this.encounter.subsystemType === "starship") updateStarshipCalculatedOutcome(this.encounter);
@@ -3584,6 +3608,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       this.encounter.backgroundBlur = Math.max(0, Math.min(20, Number(this.encounter.backgroundBlur) || 0));
       this.encounter.obscureFutureObstacles = this.element.querySelector('[name="obscureFutureObstacles"]')?.checked ?? false;
       await Store.save(this.encounter);
+      if (this.encounter.subsystemType === "starship") await announceStarshipOutcome(this.encounter, priorStarshipOutcome);
       this._dirty = false;
       ui.notifications.info(`${this.encounter.name} saved.`);
       return true;
@@ -3748,8 +3773,10 @@ async function adjustStarshipValue(encounterId, path, delta) {
     if (!ship || !["hp", "shields"].includes(key)) return;
     ship[key] = Math.max(0, Math.min(key === "hp" ? ship.maxHp : ship.maxShields, Number(ship[key]) + delta));
   }
+  const priorOutcome = encounter.starship.outcome || "";
   updateStarshipCalculatedOutcome(encounter);
   await Store.save(encounter);
+  await announceStarshipOutcome(encounter, priorOutcome);
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
@@ -3760,7 +3787,7 @@ async function declareStarshipOutcome(encounterId, outcome) {
   snapshot(encounter, `Declare starship ${outcome}`);
   encounter.starship.outcome = outcome;
   await Store.save(encounter);
-  await ChatMessage.create({ content: `<div class="influence-chat influence-result ${outcome === "victory" ? "influence-reward" : "influence-reward-lost"}"><strong>${outcome === "victory" ? "Starship Victory" : "Starship Defeat"}</strong><p>${esc(outcome === "victory" ? (encounter.victoryText || "The enemy ship has been defeated.") : (encounter.failureText || "The crew's objective was not achieved."))}</p></div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+  await announceStarshipOutcome(encounter);
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
@@ -4108,9 +4135,11 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   } else if (activity.damage) {
     damageReport = `<p><strong>${esc(activity.label)}</strong> misses ${esc(starshipTargetShip(encounter.starship, activity.target)?.name ?? "the target")}.</p>`;
   }
+  const priorStarshipOutcome = encounter.starship.outcome || "";
   const starshipOutcome = updateStarshipCalculatedOutcome(encounter);
   if (starshipOutcome) logEntry.details.push(starshipOutcome === "victory" ? "Starship victory." : "Starship defeat.");
   await Store.save(encounter);
+  await announceStarshipOutcome(encounter, priorStarshipOutcome);
   game.socket.emit(SOCKET, { action: "refresh" });
   await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(role.label)}</strong><p>${esc(actorName)} used ${esc(skill.label)} for ${esc(activity.label)}: <strong>${outcome}</strong>.</p>${damageReport}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
   tracker?.render(false);
