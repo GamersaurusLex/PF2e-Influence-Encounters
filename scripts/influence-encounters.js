@@ -1150,6 +1150,17 @@ function encounterRootFolder() {
   return game.folders?.find?.((folder) => folder.type === "JournalEntry" && folder.getFlag(MODULE_ID, "encounterRoot")) ?? null;
 }
 
+function markRemovedEncounterProperties(next, previous) {
+  if (!next || !previous || typeof next !== "object" || typeof previous !== "object" || Array.isArray(next) || Array.isArray(previous)) return;
+  for (const [key, oldValue] of Object.entries(previous)) {
+    if (!(key in next)) {
+      next[`-=${key}`] = null;
+      continue;
+    }
+    markRemovedEncounterProperties(next[key], oldValue);
+  }
+}
+
 class Store {
   static all() {
     // Players are intentionally not owners of the private Journal records.
@@ -1193,11 +1204,16 @@ class Store {
       });
       encounter.recordId = record.id;
     }
-    await record.update({
+    // Foundry merges nested flag objects. Include its supported deletion
+    // markers for properties removed from state, so empty maps such as
+    // actorsActed replace their prior entries instead of retaining them.
+    const recordData = deepClone(encounter);
+    markRemovedEncounterProperties(recordData, record.getFlag(MODULE_ID, "data") ?? {});
+    record = await record.update({
       name: encounter.name,
       img: encounter.image,
       folder: encounter.folderId || null,
-      flags: { [MODULE_ID]: { record: true, encounterId: encounter.id, data: deepClone(encounter) } }
+      flags: { [MODULE_ID]: { record: true, encounterId: encounter.id, data: recordData } }
     });
     const replicated = deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {});
     replicated[encounter.id] = deepClone(encounter);
@@ -1754,7 +1770,10 @@ function isLoreSkill(skill) {
 }
 
 function isAnyLoreSkill(skill) {
-  return !!skill.anyLore || /^any\s+lore$/i.test(String(skill.label ?? "").trim());
+  // A player-proposed statistic has no configured skill object. It is not an
+  // Any Lore entry; treat it as an ordinary attempted check instead of
+  // dereferencing null while the request is being built.
+  return !!skill?.anyLore || /^any\s+lore$/i.test(String(skill?.label ?? "").trim());
 }
 
 function esotericLoreState(actor, npc) {
@@ -2244,7 +2263,14 @@ class InfluenceTracker extends Application {
       boon.applied = true;
     } else if (action === "reset-actions") {
       snapshot(encounter, action);
+      const resetCount = Object.keys(encounter.actorsActed ?? {}).length;
       encounter.actorsActed = {};
+      // Influence phases retain their action state for Prior/Next Phase.
+      // Resetting the visible action state must reset that phase cache too,
+      // or navigating away and back can resurrect the old spent actions.
+      encounter.phaseActions ??= {};
+      if (encounter.subsystemType === "influence") encounter.phaseActions[encounter.currentPhase] = {};
+      ui.notifications.info(`Reset ${resetCount} action${resetCount === 1 ? "" : "s"} for the current ${encounter.subsystemType === "influence" ? "phase" : encounter.subsystemType === "research" ? "research interval" : "round"}.`);
     } else if (action === "declare-skill-outcome") {
       if (encounter.subsystemType !== "skill" || encounter.skillVictoryMode !== "gm") return;
       if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before declaring the outcome.");

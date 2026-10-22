@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.11 — 2026-10-21
+
+- Fixed **Reset Actions** persistence. Foundry now removes stale acted-PC keys from the private encounter Journal record instead of merging them back into an empty reset state.
+- Fixed player-proposed Influence checks crashing when no configured **Any Lore** entry is present.
+
 ## 0.8.10 — 2026-10-21
 
 - Rebuilt the GM encounter directory on Foundry VTT v14's native `JournalEntry` and `Folder` documents. Encounter folders now use Foundry's own collapse state, context menu, sorting, and drag-and-drop movement rather than module-managed imitations.
