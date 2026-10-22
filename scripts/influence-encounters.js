@@ -7,6 +7,7 @@ const SETTINGS = {
   encounters: "encounters",
   active: "activeEncounter",
   folders: "encounterFolders",
+  storageVersion: "storageVersion",
   selections: "userSelections",
   highlightOnActivation: "highlightOnActivation",
   showProgressClocks: "showProgressClocks"
@@ -1129,8 +1130,48 @@ const ABEO_MARKET_CHASE = {
   activeNpcId: parsedAbeoChase.obstacles[0]?.id ?? "", activeEffects: []
 };
 
+function encounterRecordFlag(record) {
+  return record?.getFlag?.(MODULE_ID, "record") ?? false;
+}
+
+function encounterRecordDocuments() {
+  return game.journal?.filter?.(encounterRecordFlag) ?? [];
+}
+
+function encounterRecordFor(id) {
+  return encounterRecordDocuments().find((record) => record.getFlag(MODULE_ID, "encounterId") === id) ?? null;
+}
+
+function encounterFolderDocuments() {
+  return game.folders?.filter?.((folder) => folder.type === "JournalEntry" && folder.getFlag(MODULE_ID, "encounterFolder")) ?? [];
+}
+
+function encounterRootFolder() {
+  return game.folders?.find?.((folder) => folder.type === "JournalEntry" && folder.getFlag(MODULE_ID, "encounterRoot")) ?? null;
+}
+
 class Store {
-  static all() { return deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {}); }
+  static all() {
+    // Players are intentionally not owners of the private Journal records.
+    // This replicated setting contains the existing player-safe encounter
+    // payload and keeps active encounter panels synchronized.
+    if (!game.user.isGM) return deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {});
+    const records = encounterRecordDocuments();
+    if (records.length) {
+      return Object.fromEntries(records.map((record) => [
+        record.getFlag(MODULE_ID, "encounterId"),
+        {
+          ...deepClone(record.getFlag(MODULE_ID, "data") ?? {}),
+          // Native directory drag-and-drop changes JournalEntry.folder. Make
+          // the document authoritative so a later editor save cannot undo it.
+          folderId: record.folder?.id ?? record.folder ?? "",
+          recordId: record.id
+        }
+      ]).filter(([id, encounter]) => id && encounter?.id));
+    }
+    // Keep this read-only fallback until every existing world has migrated.
+    return deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {});
+  }
   static activeId() { return game.settings.get(MODULE_ID, SETTINGS.active) ?? ""; }
   static get(id = this.activeId()) {
     const encounter = this.all()[id] ?? null;
@@ -1142,11 +1183,35 @@ class Store {
       try { await syncEncounterProgressClocks(encounter); }
       catch (error) { reportProgressClockError(error); }
     }
-    const all = this.all();
-    all[encounter.id] = deepClone(encounter);
-    await game.settings.set(MODULE_ID, SETTINGS.encounters, all);
+    let record = encounterRecordFor(encounter.id);
+    if (!record) {
+      record = await JournalEntry.create({
+        name: encounter.name,
+        folder: encounter.folderId || null,
+        ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS.NONE },
+        flags: { [MODULE_ID]: { record: true, encounterId: encounter.id, data: {} } }
+      });
+      encounter.recordId = record.id;
+    }
+    await record.update({
+      name: encounter.name,
+      img: encounter.image,
+      folder: encounter.folderId || null,
+      flags: { [MODULE_ID]: { record: true, encounterId: encounter.id, data: deepClone(encounter) } }
+    });
+    const replicated = deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {});
+    replicated[encounter.id] = deepClone(encounter);
+    await game.settings.set(MODULE_ID, SETTINGS.encounters, replicated);
     if (game.user.isGM) await syncEncounterJournal(encounter);
+    // A first journal sync can allocate the public archive ID. Persist it to
+    // the private record without ever exposing encounter mechanics to players.
+    if (record && record.getFlag(MODULE_ID, "data")?.journalId !== encounter.journalId) {
+      await record.update({ flags: { [MODULE_ID]: { record: true, encounterId: encounter.id, data: deepClone(encounter) } } });
+    }
     Hooks.callAll("influenceEncounterUpdated", encounter.id);
+    // Private record Journals deliberately do not synchronize to players.
+    // The existing socket refresh replaces the old world-setting broadcast.
+    if (game.user.isGM) game.socket.emit(SOCKET, { action: "refresh" });
   }
   static async remove(id) {
     const encounter = this.get(id);
@@ -1155,9 +1220,11 @@ class Store {
       catch (error) { reportProgressClockError(error); }
     }
     if (this.activeId() === id) await game.settings.set(MODULE_ID, SETTINGS.active, "");
-    const all = this.all();
-    delete all[id];
-    await game.settings.set(MODULE_ID, SETTINGS.encounters, all);
+    const record = encounterRecordFor(id);
+    if (record) await record.delete();
+    const replicated = deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {});
+    delete replicated[id];
+    await game.settings.set(MODULE_ID, SETTINGS.encounters, replicated);
   }
   static async setActive(id) { await game.settings.set(MODULE_ID, SETTINGS.active, id); }
 }
@@ -1243,20 +1310,77 @@ async function syncEncounterProgressClocks(encounter) {
 
 class FolderStore {
   static all() {
-    return indexedArray(deepClone(game.settings.get(MODULE_ID, SETTINGS.folders) ?? [])).map((folder) => ({
-      ...folder,
-      color: folder.color || "#000000",
-      sorting: folder.sorting === "m" ? "m" : "a"
-    }));
+    return encounterFolderDocuments();
   }
   static async save(folders) {
-    await game.settings.set(MODULE_ID, SETTINGS.folders, indexedArray(folders));
-    renderInfluenceSidebar();
+    // Compatibility bridge for the few editor call sites that predate real
+    // Folder documents. New directory operations are handled by Foundry.
+    for (const folder of folders) {
+      const existing = game.folders.get(folder.id);
+      if (existing) await existing.update(folder);
+      else await Folder.create({ ...folder, type: "JournalEntry", flags: { [MODULE_ID]: { encounterFolder: true } } });
+    }
   }
 }
 
+// Retained only while non-GM clients display the active-encounter summary.
+// The GM directory itself now reads actual Folder documents.
 let influenceSidebarSearch = "";
 const collapsedInfluenceFolders = new Set();
+
+async function migrateEncounterStorage() {
+  if (!game.user.isGM || game.settings.get(MODULE_ID, SETTINGS.storageVersion) >= 2) return;
+  const legacy = deepClone(game.settings.get(MODULE_ID, SETTINGS.encounters) ?? {});
+  const legacyFolders = indexedArray(deepClone(game.settings.get(MODULE_ID, SETTINGS.folders) ?? []));
+  if (!Object.keys(legacy).length && !legacyFolders.length) {
+    await game.settings.set(MODULE_ID, SETTINGS.storageVersion, 2);
+    return;
+  }
+
+  let root = encounterRootFolder();
+  if (!root) {
+    root = await Folder.create({
+      name: "Influence Encounters",
+      type: "JournalEntry",
+      sorting: "a",
+      color: "#6b5d4d",
+      flags: { [MODULE_ID]: { encounterRoot: true } }
+    });
+  }
+  const folderMap = new Map();
+  for (const legacyFolder of legacyFolders) {
+    let folder = encounterFolderDocuments().find((entry) => entry.getFlag(MODULE_ID, "legacyId") === legacyFolder.id);
+    if (!folder) {
+      folder = await Folder.create({
+        name: legacyFolder.name || "Folder",
+        type: "JournalEntry",
+        // Encounter folders are true root-level JournalEntry folders. The
+        // private root marker is only a migration sentinel; it is never a
+        // wrapper the GM has to click through.
+        folder: null,
+        sorting: legacyFolder.sorting === "m" ? "m" : "a",
+        color: legacyFolder.color || "#000000",
+        flags: { [MODULE_ID]: { encounterFolder: true, legacyId: legacyFolder.id } }
+      });
+    }
+    folderMap.set(legacyFolder.id, folder.id);
+  }
+  for (const source of Object.values(legacy)) {
+    const encounter = normalizeEncounterCollections(deepClone(source));
+    if (!encounter?.id || encounterRecordFor(encounter.id)) continue;
+    encounter.folderId = folderMap.get(encounter.folderId) || "";
+    const record = await JournalEntry.create({
+      name: encounter.name,
+      img: encounter.image,
+      folder: encounter.folderId || null,
+      ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS.NONE },
+      flags: { [MODULE_ID]: { record: true, encounterId: encounter.id, data: encounter } }
+    });
+    encounter.recordId = record.id;
+    await record.update({ flags: { [MODULE_ID]: { record: true, encounterId: encounter.id, data: encounter } } });
+  }
+  await game.settings.set(MODULE_ID, SETTINGS.storageVersion, 2);
+}
 
 function participantPortrait(actor) {
   return actor?.prototypeToken?.texture?.src || actor?.img || "icons/svg/mystery-man.svg";
@@ -1405,9 +1529,6 @@ async function syncEncounterJournal(encounter) {
     });
     if (!journal) return;
     encounter.journalId = journal.id;
-    const all = Store.all();
-    all[encounter.id] = deepClone(encounter);
-    await game.settings.set(MODULE_ID, SETTINGS.encounters, all);
   }
   const journalName = encounterJournalName(encounter);
   if (journal.name !== journalName) await journal.update({ name: journalName });
@@ -2233,54 +2354,107 @@ function triggerVictorySplash(encounter) {
   if (game.user.isGM) game.socket.emit(SOCKET, { action: "victory-splash", encounterId: encounter.id });
 }
 
-class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.sidebar.AbstractSidebarTab) {
+class InfluenceSidebar extends foundry.applications.sidebar.tabs.JournalDirectory {
   static tabName = "influenceEncounters";
-  static DEFAULT_OPTIONS = {
+  static DEFAULT_OPTIONS = foundry.utils.mergeObject(super.DEFAULT_OPTIONS, {
+    id: "influence-encounters",
     classes: [MODULE_ID, "influence-sidebar"],
-    actions: {
-      "new-encounter": (event, target) => handleSidebarAction({ currentTarget: target }),
-      "new-folder": (event, target) => handleSidebarAction({ currentTarget: target }),
-      "clear-search": (event, target) => handleSidebarAction({ currentTarget: target }),
-      "toggle-folder": (event, target) => handleSidebarAction({ currentTarget: target }),
-      "open-encounter": (event, target) => handleSidebarAction({ currentTarget: target })
-    },
-    window: {
-      title: "Influence Encounter",
-      icon: "fa-solid fa-comments",
-      resizable: true
-    }
-  };
-  static PARTS = {
-    sidebar: { template: `modules/${MODULE_ID}/templates/sidebar.hbs`, root: true, scrollable: [".influence-sidebar-content"] }
-  };
+    window: { title: "Influence Encounter", icon: "fa-solid fa-comments", resizable: true }
+  }, { inplace: false });
+
+  get title() { return "Influence Encounters"; }
+
+  // JournalDirectory normally knows it belongs to Foundry's built-in journal
+  // tab. Our registered sidebar tab needs the same documented V2 insertion
+  // point, otherwise it is rendered under <body> and can never be shown.
+  async _insertElement(element, options) {
+    const content = document.getElementById("sidebar-content");
+    if (content) content.append(element);
+    else await super._insertElement(element, options);
+  }
+
+  _removeElement(element) {
+    element.remove();
+  }
 
   async _prepareContext(options) {
     const context = await super._prepareContext(options);
-    const sidebar = renderInfluenceSidebarContent();
-    return { ...context, content: sidebar.html, isGM: game.user.isGM, isDirectory: sidebar.directory };
+    context.documentName = "Encounter";
+    context.folderIcon = "fa-solid fa-folder";
+    return context;
   }
 
   async _onRender(context, options) {
     await super._onRender(context, options);
-    this._sidebarAbort?.abort();
-    this._sidebarAbort = new AbortController();
-    const { signal } = this._sidebarAbort;
-    const panel = this.element.querySelector(".influence-sidebar-content");
-    if (!panel) return;
-    if (!game.user.isGM) return;
-    activateEncounterDirectoryListeners(panel, signal);
+    const element = this.element;
+    for (const button of element.querySelectorAll(".create-entry")) {
+      const span = button.querySelector("span");
+      if (span) span.replaceChildren("Create Encounter");
+      button.setAttribute("aria-label", "Create Encounter");
+      button.setAttribute("data-tooltip", "Create Encounter");
+    }
+    const search = element.querySelector('input[name="search"]');
+    if (search) {
+      search.placeholder = "Search Encounters";
+      search.setAttribute("aria-label", "Search Encounters");
+    }
+    for (const entry of element.querySelectorAll(".directory-item.entry[data-entry-id]")) {
+      const record = game.journal.get(entry.dataset.entryId);
+      if (!encounterRecordFlag(record)) continue;
+      const image = record.img || record.getFlag(MODULE_ID, "data")?.image;
+      if (!image || entry.querySelector("img.thumbnail")) continue;
+      const thumbnail = document.createElement("img");
+      thumbnail.className = "thumbnail";
+      thumbnail.src = image;
+      thumbnail.alt = "";
+      entry.prepend(thumbnail);
+    }
   }
 
-  async _onFirstRender(context, options) {
-    await super._onFirstRender(context, options);
-    if (game.user.isGM) this._createContextMenu(this._getEncounterContextOptions, ".influence-sidebar-encounter", { fixed: true });
+  async _prepareDirectoryContext(context, options) {
+    await super._prepareDirectoryContext(context, options);
+    const isEncounterFolder = (folder) => folder?.getFlag?.(MODULE_ID, "encounterFolder") === true;
+    const prune = (node) => {
+      if (!node) return false;
+      if (Array.isArray(node.entries)) node.entries = node.entries.filter(encounterRecordFlag);
+      if (Array.isArray(node.children)) node.children = node.children.filter((child) => isEncounterFolder(child.folder) && prune(child));
+      if (Array.isArray(node.folders)) node.folders = node.folders.filter((child) => isEncounterFolder(child.folder ?? child) && prune(child));
+      return !!node.folder ? isEncounterFolder(node.folder) || node.entries?.length || node.children?.length || node.folders?.length : true;
+    };
+    prune(context.tree);
   }
 
-  _getEncounterContextOptions() {
+  async _onClickEntry(event, target) {
+    const element = target?.closest?.("[data-entry-id]") ?? target;
+    const record = game.journal.get(element?.dataset?.entryId);
+    const encounter = record?.getFlag?.(MODULE_ID, "data");
+    if (!encounter) return;
+    event.preventDefault();
+    return openSidebarEncounter(encounter.id);
+  }
+
+  async _onCreateEntry(event, target) {
+    event.preventDefault();
+    return openCreateEncounterDialog(event, target?.closest?.("[data-folder-id]")?.dataset?.folderId || "");
+  }
+
+  async _onCreateFolder(event, target) {
+    event.preventDefault();
+    const folder = await Folder.create({
+      name: "New Encounter Folder",
+      type: "JournalEntry",
+      folder: target?.closest?.("[data-folder-id]")?.dataset?.folderId || null,
+      sorting: "a",
+      flags: { [MODULE_ID]: { encounterFolder: true } }
+    });
+    return folder?.sheet?.render({ force: true });
+  }
+
+  _getEntryContextOptions() {
     const getEncounter = (target) => {
       const element = target?.[0] ?? target;
-      const entryId = element?.dataset?.entryId ?? element?.closest?.("[data-entry-id]")?.dataset?.entryId;
-      return entryId ? Store.get(entryId) : null;
+      const recordId = element?.dataset?.entryId ?? element?.closest?.("[data-entry-id]")?.dataset?.entryId;
+      return game.journal.get(recordId)?.getFlag(MODULE_ID, "data") ?? null;
     };
     return [{
       label: "Edit",
@@ -2314,10 +2488,6 @@ class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.s
       icon: "fa-solid fa-copy",
       onClick: (_event, target) => duplicateEncounter(getEncounter(target).id)
     }, {
-      label: "Move to Folder",
-      icon: "fa-solid fa-folder-tree",
-      onClick: (event, target) => promptEncounterFolderMove(event, getEncounter(target).id)
-    }, {
       label: "Export Data",
       icon: "fa-solid fa-file-export",
       onClick: (_event, target) => exportEncounterData(getEncounter(target).id)
@@ -2332,6 +2502,29 @@ class InfluenceSidebar extends HandlebarsApplicationMixin(foundry.applications.s
     }];
   }
 
+}
+
+// Players retain the focused active-encounter summary rather than receiving a
+// private JournalEntry directory. The GM alone gets the native document
+// directory, which is where folders and drag/drop administration belong.
+class InfluencePlayerSidebar extends HandlebarsApplicationMixin(foundry.applications.sidebar.AbstractSidebarTab) {
+  static tabName = "influenceEncounters";
+  static DEFAULT_OPTIONS = {
+    classes: [MODULE_ID, "influence-sidebar"],
+    actions: {
+      "clear-search": (event, target) => handleSidebarAction({ currentTarget: target }),
+      "open-encounter": (event, target) => handleSidebarAction({ currentTarget: target })
+    },
+    window: { title: "Influence Encounter", icon: "fa-solid fa-comments", resizable: true }
+  };
+  static PARTS = {
+    sidebar: { template: `modules/${MODULE_ID}/templates/sidebar.hbs`, root: true, scrollable: [".influence-sidebar-content"] }
+  };
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
+    const sidebar = renderInfluenceSidebarContent();
+    return { ...context, content: sidebar.html, isGM: false, isDirectory: false };
+  }
   _onClickAction(event, target) {
     event.preventDefault();
     return handleSidebarAction({ currentTarget: target });
@@ -4526,7 +4719,6 @@ function refreshTrackerForEncounterState() {
   return tracker?.close();
 }
 Hooks.once("init", () => {
-  CONFIG.ui.influenceEncounters = InfluenceSidebar;
   const sidebarTabs = CONFIG.ui.sidebar.TABS;
   const influenceTab = { tooltip: "Influence Encounter", icon: "fa-solid fa-comments" };
   const orderedTabs = [];
@@ -4540,6 +4732,7 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, SETTINGS.encounters, { scope: "world", config: false, type: Object, default: {} });
   game.settings.register(MODULE_ID, SETTINGS.active, { scope: "world", config: false, type: String, default: "" });
   game.settings.register(MODULE_ID, SETTINGS.folders, { scope: "world", config: false, type: Array, default: [] });
+  game.settings.register(MODULE_ID, SETTINGS.storageVersion, { scope: "world", config: false, type: Number, default: 1 });
   game.settings.register(MODULE_ID, SETTINGS.selections, { scope: "client", config: false, type: Object, default: {} });
   game.settings.register(MODULE_ID, SETTINGS.showProgressClocks, {
     name: "Show Global Progress Clocks",
@@ -4569,7 +4762,15 @@ Hooks.once("init", () => {
   ]);
 });
 
+// User permissions are not reliable during `init`; select the GM's native
+// directory versus the player's active-encounter summary once Foundry has
+// established the client user, before UI construction.
+Hooks.once("setup", () => {
+  CONFIG.ui.influenceEncounters = game.user?.isGM ? InfluenceSidebar : InfluencePlayerSidebar;
+});
+
 Hooks.once("ready", async () => {
+  await migrateEncounterStorage();
   applyProgressClockVisibility();
   const orphanedActiveId = Store.activeId();
   if (game.user.isGM && orphanedActiveId && !Store.get(orphanedActiveId)) await Store.setActive("");
@@ -4616,11 +4817,23 @@ Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); 
 // world setting to another client. Refresh from the Setting update itself so
 // player pickers use the saved encounter data, not a just-stale local copy.
 Hooks.on("updateSetting", (setting) => {
-  if (setting.namespace !== MODULE_ID || ![SETTINGS.encounters, SETTINGS.active].includes(setting.key)) return;
+  if (setting.namespace !== MODULE_ID || ![SETTINGS.encounters, SETTINGS.active, SETTINGS.storageVersion].includes(setting.key)) return;
   renderInfluenceSidebar();
   refreshTrackerForEncounterState();
   renderCinematicHud();
 });
+
+for (const hook of ["createJournalEntry", "updateJournalEntry", "deleteJournalEntry", "createFolder", "updateFolder", "deleteFolder"]) {
+  Hooks.on(hook, (document) => {
+    const relevant = document?.documentName === "JournalEntry"
+      ? encounterRecordFlag(document)
+      : document?.type === "JournalEntry" && (document.getFlag(MODULE_ID, "encounterFolder") || document.getFlag(MODULE_ID, "encounterRoot"));
+    if (!relevant) return;
+    renderInfluenceSidebar();
+    refreshTrackerForEncounterState();
+    renderCinematicHud();
+  });
+}
 
 Hooks.on("getSceneControlButtons", (controls) => {
   const tokenTools = controls.tokens?.tools;

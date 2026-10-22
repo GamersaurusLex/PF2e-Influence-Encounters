@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.10 — 2026-10-21
+
+- Rebuilt the GM encounter directory on Foundry VTT v14's native `JournalEntry` and `Folder` documents. Encounter folders now use Foundry's own collapse state, context menu, sorting, and drag-and-drop movement rather than module-managed imitations.
+- Existing encounter records and folders migrate automatically the first time a GM opens an updated world. The prior world-setting payload remains as a player synchronization and rollback-safe cache.
+- Kept the player-facing active-encounter sidebar focused on the current encounter while reserving native folder administration for GMs.
+
 ## 0.8.9 — 2026-10-21
 
 - Added an Influence-only **Threshold Outcomes** policy. GMs can now keep earned boons, consequences, and threshold text hidden from players until the encounter ends.
