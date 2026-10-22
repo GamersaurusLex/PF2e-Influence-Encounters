@@ -2441,13 +2441,16 @@ class InfluenceSidebar extends foundry.applications.sidebar.tabs.JournalDirector
     await super._prepareDirectoryContext(context, options);
     const isEncounterFolder = (folder) => folder?.getFlag?.(MODULE_ID, "encounterFolder") === true;
     const prune = (node) => {
-      if (!node) return false;
-      if (Array.isArray(node.entries)) node.entries = node.entries.filter(encounterRecordFlag);
-      if (Array.isArray(node.children)) node.children = node.children.filter((child) => isEncounterFolder(child.folder) && prune(child));
-      if (Array.isArray(node.folders)) node.folders = node.folders.filter((child) => isEncounterFolder(child.folder ?? child) && prune(child));
-      return !!node.folder ? isEncounterFolder(node.folder) || node.entries?.length || node.children?.length || node.folders?.length : true;
+      if (!node) return null;
+      // Foundry shares this tree with the Journal directory. Copy tree nodes,
+      // not the native Folder/JournalEntry documents, before filtering our view.
+      const filtered = { ...node };
+      if (Array.isArray(node.entries)) filtered.entries = node.entries.filter(encounterRecordFlag);
+      if (Array.isArray(node.children)) filtered.children = node.children.filter((child) => isEncounterFolder(child.folder)).map(prune).filter(Boolean);
+      if (Array.isArray(node.folders)) filtered.folders = node.folders.filter((child) => isEncounterFolder(child.folder ?? child)).map(prune).filter(Boolean);
+      return !filtered.folder || isEncounterFolder(filtered.folder) || filtered.entries?.length || filtered.children?.length || filtered.folders?.length ? filtered : null;
     };
-    prune(context.tree);
+    context.tree = prune(context.tree);
   }
 
   async _onClickEntry(event, target) {

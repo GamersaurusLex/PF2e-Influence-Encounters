@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.12 — 2026-10-22
+
+- Fixed the Influence Encounters sidebar modifying Foundry's shared Journal directory tree, which could hide normal Journal folders and Campaign Codex categories. The encounter sidebar now filters its own copy while preserving native Folder and JournalEntry documents.
+- Added a regression test covering repeated renders, normal Journal folders, and empty encounter folders.
+
 ## 0.8.11 — 2026-10-21
 
 - Fixed **Reset Actions** persistence. Foundry now removes stale acted-PC keys from the private encounter Journal record instead of merging them back into an empty reset state.
