@@ -1,6 +1,7 @@
 <section class="influence-tracker">
   {{#if isStarship}}
   <header class="encounter-header starship-header"><img src="{{heart.image}}" alt="{{heart.name}}"><div><h2>{{encounter.name}}{{#if isPaused}} (Paused){{/if}}</h2><p>Round {{encounter.currentRound}} · {{#if roleSelectionStage}}Crew role selection{{else}}Crew actions{{/if}}</p></div><div class="points">Countdown {{starship.countdown.value}} / {{starship.countdown.limit}}</div></header>
+  {{#if tableSpotlight}}<p class="influence-table-status"><i class="fas fa-gavel"></i> Now resolving: <strong>{{tableSpotlight.actorName}}</strong> → <strong>{{tableSpotlight.npcName}}</strong></p>{{/if}}
   <nav class="tracker-tabs tabs" data-group="tracker"><a class="item" data-tab="encounter"><i class="fas fa-shuttle-space"></i> Starship Encounter</a><a class="item" data-tab="log"><i class="fas fa-list"></i> Check Log</a></nav>
   <div class="tracker-content"><div class="tab" data-group="tracker" data-tab="encounter">
     <section class="starship-status-grid">

@@ -357,6 +357,11 @@ function starshipTrackerContext(encounter) {
   const friendlyShip = starshipShip(starship, "friendly");
   const hostileShip = starshipShip(starship, "hostile");
   const finished = !!starshipOutcome;
+  const tableRequest = !game.user.isGM ? encounter.pendingChecks?.[0] : null;
+  const tableSpotlight = tableRequest ? {
+    actorName: participantDisplayName(encounter, game.actors.get(tableRequest.actorId)),
+    npcName: hostileShip?.name ?? "Hostile ship"
+  } : null;
   const pendingChecks = game.user.isGM ? (encounter.pendingChecks ?? []).map((request, index) => {
     const actor = game.actors.get(request.actorId);
     const activity = starshipActivityFor(encounter, request.roleId, request.activityId);
@@ -368,7 +373,7 @@ function starshipTrackerContext(encounter) {
     heart: starshipShipContext(hostileShip),
     actors: participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter.actorsActed?.[actor.id], roleLabel: starshipRole(encounter, starship.roleSelections[actor.id])?.label ?? "Unassigned" })),
     checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry, typeLabel: entry.type === "starship" ? "Crew Action" : entry.type, displayOutcome: entry.outcome })),
-    controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, finished, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
+    controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, tableSpotlight, finished, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
     canClaimRole: encounter.status === "active" && starship.stage === "role-selection" && !!selectedActor,
     canStartStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "role-selection" && !finished,
     canTakeStarshipAction: encounter.status === "active" && starship.stage === "actions" && !!selectedActor && !!selectedRole && !!selectedActionId && !!selectedSkillSlug && !encounter.actorsActed?.[selectedActor.id] && !finished,
@@ -1959,7 +1964,7 @@ class InfluenceTracker extends Application {
     const activeNpc = activeNpcRecord ? { ...activeNpcRecord, name: targetDisplayName(activeNpcRecord), researchActorState: activeResearchState } : null;
     const thresholdSource = isResearch ? (encounter?.researchThresholds ?? []) : (isChase || isSkill) ? [] : (activeNpcRecord?.thresholds ?? []);
     const showInfluenceRewards = game.user.isGM || influenceRewardsAreVisible(encounter);
-    const tableRequest = !game.user.isGM && encounter?.subsystemType === "influence" ? encounter.pendingChecks?.[0] : null;
+    const tableRequest = !game.user.isGM ? encounter?.pendingChecks?.[0] : null;
     const tableSpotlight = tableRequest ? {
       actorName: participantDisplayName(encounter, game.actors.get(tableRequest.actorId)),
       npcName: targetDisplayName(encounter.npcs.find((npc) => npc.id === tableRequest.npcId))

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.13 — 2026-10-23
+
+- Extended the quiet player-facing **Now resolving: PC → target** status to Chase, Research, Skill, and Starship encounter requests while the GM adjudicates them.
+
 ## 0.8.12 — 2026-10-22
 
 - Fixed the Influence Encounters sidebar modifying Foundry's shared Journal directory tree, which could hide normal Journal folders and Campaign Codex categories. The encounter sidebar now filters its own copy while preserving native Folder and JournalEntry documents.
