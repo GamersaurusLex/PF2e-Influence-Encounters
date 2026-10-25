@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.14 — 2026-10-25
+
+- Migrated the encounter tracker and manager to Foundry v14's native ApplicationV2 framework, including native tabs and action dispatch.
+- Migrated legacy dialogs to DialogV2 while preserving check adjudication, custom modifiers, Lore selection, numeric cancellation, and unsaved-change protection.
+- Removed the deprecated chat-render hook and corrected button wrapping in the native windows.
+- Added regression coverage for native actions, subsystem switching, dialog cancellation, Lore selection, target configuration, and unsaved edits. Verified locally in PF2e and SF2e, with additional user testing in Staging.
+
 ## 0.8.13 — 2026-10-23
 
 - Extended the quiet player-facing **Now resolving: PC → target** status to Chase, Research, Skill, and Starship encounter requests while the GM adjudicates them.

@@ -2,6 +2,8 @@
 .influence-encounters button { width: auto; }
 .influence-journal-button { flex: 0 0 auto; }
 .influence-tracker, .influence-manager { padding: 1rem; }
+.influence-tracker button, .influence-manager button { height: auto; min-height: var(--input-height); white-space: normal; }
+.influence-tracker footer, .influence-manager .toolbar { flex-wrap: wrap; }
 .encounter-header { display: grid; grid-template-columns: 72px 1fr auto; gap: 1rem; align-items: center; border-bottom: 1px solid var(--color-border-light-2); padding-bottom: .75rem; }
 .encounter-header img, .encounter-row img { width: 72px; height: 72px; object-fit: cover; border: 0; border-radius: 6px; }
 .encounter-header h2, .encounter-row h3 { margin: 0; }

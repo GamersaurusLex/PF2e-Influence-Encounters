@@ -12,8 +12,7 @@ const SETTINGS = {
   highlightOnActivation: "highlightOnActivation",
   showProgressClocks: "showProgressClocks"
 };
-const { Application, Dialog } = foundry.appv1.api;
-const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+const { ApplicationV2, DialogV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
 const deepClone = (value) => foundry.utils.deepClone(value);
 const randomID = () => foundry.utils.randomID();
@@ -1598,7 +1597,7 @@ async function maybePromptRoundAdvance(encounter) {
   if (roundAdvancePrompts.has(key)) return;
   roundAdvancePrompts.add(key);
   try {
-    const advance = await Dialog.confirm({ title: `${unit.titleCase()} Complete`, content: `<p>All participating PCs have acted in ${unit} ${roundNumber}. Advance to the next ${unit}?</p>` });
+    const advance = await DialogV2.confirm({ window: { title: `${unit.titleCase()} Complete` }, rejectClose: false, content: `<p>All participating PCs have acted in ${unit} ${roundNumber}. Advance to the next ${unit}?</p>` });
     if (advance) await tracker?._action({ currentTarget: { dataset: { action: encounter.subsystemType === "influence" ? "advance" : "next-round" } } });
   } finally {
     roundAdvancePrompts.delete(key);
@@ -1896,51 +1895,61 @@ async function chooseLoreSpecialization(category) {
       settled = true;
       resolve(value);
     };
-    const dialog = new Dialog({
-      title: category.replace(/\s*\*$/, ""),
-      content: `<form class="lore-specialization-picker"><div class="form-group"><label>Search examples</label><input type="search" name="loreSearch" placeholder="Search Lore examples"></div><div class="lore-example-list">${examples.map((example) => `<button type="button" data-lore-example="${esc(example)}">${esc(example)}</button>`).join("")}</div><hr><div class="form-group"><label>Custom Lore</label><input name="customLore" placeholder="Enter a specific subject"></div><p class="hint">“Lore” is added automatically if it is omitted.</p></form>`,
-      render: (html) => {
-        html.find('[name="loreSearch"]').on("input", (event) => {
+    DialogV2.wait({
+      window: { title: category.replace(/\s*\*$/, "") }, position: { width: 470 },
+      content: `<div class="lore-specialization-picker"><div class="form-group"><label>Search examples</label><input type="search" name="loreSearch" placeholder="Search Lore examples"></div><div class="lore-example-list">${examples.map((example) => `<button type="button" data-lore-example="${esc(example)}">${esc(example)}</button>`).join("")}</div><hr><div class="form-group"><label>Custom Lore</label><input name="customLore" placeholder="Enter a specific subject"></div><p class="hint">“Lore” is added automatically if it is omitted.</p></div>`,
+      render: (_event, app) => {
+        const html = app.element;
+        html.querySelector('[name="loreSearch"]').addEventListener("input", (event) => {
           const query = String(event.currentTarget.value).trim().toLowerCase();
-          html.find("[data-lore-example]").each((_, button) => { button.hidden = !button.dataset.loreExample.toLowerCase().includes(query); });
+          html.querySelectorAll("[data-lore-example]").forEach((button) => { button.hidden = !button.dataset.loreExample.toLowerCase().includes(query); });
         });
-        html.find("[data-lore-example]").on("click", (event) => { finish(event.currentTarget.dataset.loreExample); dialog.close(); });
+        html.querySelectorAll("[data-lore-example]").forEach((button) => button.addEventListener("click", (event) => { finish(event.currentTarget.dataset.loreExample); app.close(); }));
       },
-      buttons: {
-        use: { icon: '<i class="fa-solid fa-check"></i>', label: "Use Lore", callback: (html) => {
-          let value = String(html.find('[name="customLore"]').val() ?? "").trim();
+      buttons: [
+        { action: "use", default: true, icon: "fa-solid fa-check", label: "Use Lore", callback: (_event, button) => {
+          let value = String(button.form.elements.customLore.value ?? "").trim();
           if (value && !/\bLore$/i.test(value)) value += " Lore";
           finish(value || null);
         } },
-        cancel: { label: "Cancel", callback: () => finish(null) }
-      },
-      default: "use",
+        { action: "cancel", label: "Cancel", callback: () => finish(null) }
+      ],
       close: () => finish(null)
-    }, { width: 470 });
-    dialog.render(true);
+    });
   });
 }
 
-class InfluenceTracker extends Application {
-  constructor(options = {}) { super(options); }
-  get template() {
-    return Store.get()?.subsystemType === "starship"
-      ? `modules/${MODULE_ID}/templates/starship-tracker.hbs`
-      : this.options.template;
+class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
+  static DEFAULT_OPTIONS = {
+    id: "influence-encounter-tracker", classes: [MODULE_ID],
+    position: { width: 640, height: "auto" },
+    window: { resizable: true },
+    actions: Object.fromEntries([
+      "manage", "edit", "claim-starship-role", "unclaim-starship-role", "select-starship-action",
+      "take-starship-action", "start-starship-round", "next-starship-round", "starship-adjust",
+      "declare-starship-outcome", "select-participant", "select-npc", "request", "adjudicate-request",
+      "cancel-request", "open-for-players", "pause", "resume", "victory-splash", "reveal-influence-rewards",
+      "undo", "next-round", "prior", "advance", "pass-obstacle", "adjust", "change-ip", "apply-reward",
+      "reset-actions", "declare-skill-outcome", "declare-chase-outcome",
+      "end-encounter", "remove-effect", "resolve-pending-discovery"
+    ].map((action) => [action, function(event, target) { return this._action(event, target); }]))
+  };
+  static PARTS = { tracker: { template: `modules/${MODULE_ID}/templates/tracker.hbs` } };
+  static TABS = { tracker: { initial: "encounter", tabs: [{ id: "encounter", label: "Encounter" }, { id: "log", label: "Check Log" }] } };
+  get title() { return Store.get()?.subsystemType === "starship" ? "Starship Encounter" : "Influence Encounter"; }
+  _configureRenderOptions(options) {
+    super._configureRenderOptions(options);
+    options.window = { ...options.window, title: this.title };
   }
-  static get defaultOptions() {
-    return foundry.utils.mergeObject(super.defaultOptions, {
-      id: "influence-encounter-tracker",
-      title: "Influence Encounter",
-      template: `modules/${MODULE_ID}/templates/tracker.hbs`,
-      width: 640,
-      height: "auto",
-      resizable: true,
-      classes: [MODULE_ID],
-      tabs: [{ navSelector: ".tracker-tabs", contentSelector: ".tracker-content", initial: "encounter" }]
-    });
+  _configureRenderParts(options) {
+    const parts = super._configureRenderParts(options);
+    parts.tracker = { ...parts.tracker, template: `modules/${MODULE_ID}/templates/${Store.get()?.subsystemType === "starship" ? "starship-tracker" : "tracker"}.hbs` };
+    return parts;
   }
-  getData() {
+  async _prepareContext(options) {
+    return { ...await super._prepareContext(options), ...this.encounterContext(), tabs: this._prepareTabs("tracker") };
+  }
+  encounterContext() {
     const encounter = Store.get();
     if (encounter?.subsystemType === "starship") {
       return starshipTrackerContext(encounter);
@@ -2031,19 +2040,18 @@ class InfluenceTracker extends Application {
       canNextRound: (isChase || isSkill) && encounter?.status === "active" && !encounter?.chaseOutcome && !encounter?.skillOutcome && !(isSkill && encounter.skillVictoryMode === "gm" && encounter.roundLimit && encounter.currentRound >= encounter.roundLimit),
       roundActionLabel: isSkill && encounter?.skillVictoryMode === "goal" && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : isBeatClock && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : "Next Round" };
   }
-  activateListeners(html) {
-    super.activateListeners(html);
-    html.find("[data-action]").on("click", (event) => this._action(event));
-    html.find("[data-starship-skill]").on("change", (event) => {
+  _onRender(context, options) {
+    super._onRender(context, options);
+    this.element.querySelectorAll("[data-starship-skill]").forEach((input) => input.addEventListener("change", (event) => {
       const encounter = Store.get();
       if (encounter?.subsystemType !== "starship") return;
       setStarshipActionSelection(encounter, encounterViewSelection(encounter).actorId, event.currentTarget.dataset.activityId, event.currentTarget.value);
-    });
+    }));
   }
-  async _action(event) {
-    const action = event.currentTarget.dataset.action;
+  async _action(event, target = event.currentTarget) {
+    const action = target.dataset.action;
     const encounter = Store.get();
-    if (action === "manage") return new EncounterManager().render(true);
+    if (action === "manage") return new EncounterManager().render({ force: true });
     if (action === "edit") {
       if (!encounter || !game.user.isGM) return;
       return new EncounterEditor(encounter).render({ force: true });
@@ -2052,65 +2060,65 @@ class InfluenceTracker extends Application {
     if (encounter.subsystemType === "starship") {
       if (action === "claim-starship-role") {
         const actorId = encounterViewSelection(encounter).actorId;
-        return requestStarshipRole(encounter, actorId, event.currentTarget.dataset.roleId);
+        return requestStarshipRole(encounter, actorId, target.dataset.roleId);
       }
       if (action === "unclaim-starship-role") {
         const actorId = encounterViewSelection(encounter).actorId;
-        return requestStarshipRole(encounter, actorId, event.currentTarget.dataset.roleId, { unclaim: true });
+        return requestStarshipRole(encounter, actorId, target.dataset.roleId, { unclaim: true });
       }
       if (action === "select-starship-action") {
         const actorId = encounterViewSelection(encounter).actorId;
-        return setStarshipActionSelection(encounter, actorId, event.currentTarget.dataset.activityId);
+        return setStarshipActionSelection(encounter, actorId, target.dataset.activityId);
       }
       if (action === "take-starship-action") {
         return requestStarshipCheck(encounter, encounterViewSelection(encounter).actorId);
       }
       if (action === "start-starship-round") return startStarshipRound(encounter.id);
       if (action === "next-starship-round") return nextStarshipRound(encounter.id);
-      if (action === "starship-adjust") return adjustStarshipValue(encounter.id, event.currentTarget.dataset.path, Number(event.currentTarget.dataset.delta));
-      if (action === "declare-starship-outcome") return declareStarshipOutcome(encounter.id, event.currentTarget.dataset.outcome);
+      if (action === "starship-adjust") return adjustStarshipValue(encounter.id, target.dataset.path, Number(target.dataset.delta));
+      if (action === "declare-starship-outcome") return declareStarshipOutcome(encounter.id, target.dataset.outcome);
     }
     if (action === "select-participant") {
-      const actorId = event.currentTarget.dataset.actorId;
+      const actorId = target.dataset.actorId;
       const actor = game.actors.get(actorId);
       if (!game.user.isGM && !canUserControlActor(actor)) return ui.notifications.warn(`You do not own ${actor?.name ?? "that character"}.`);
       if (game.user.isGM) {
         encounter.activeActorId = actorId;
         await Store.save(encounter);
-        this.render(true);
+        this.render({ force: true });
       } else {
         await setEncounterViewSelection(encounter, { actorId });
-        this.render(false);
+        this.render({ force: false });
         renderInfluenceSidebar();
         renderCinematicHud();
       }
       return;
     }
     if (action === "select-npc") {
-      const npcId = event.currentTarget.dataset.npcId;
+      const npcId = target.dataset.npcId;
       if (encounter.subsystemType === "chase" && npcId !== encounter.activeNpcId) return ui.notifications.info("Chase obstacles are attempted in order.");
       if (game.user.isGM) {
         encounter.activeNpcId = npcId;
         await Store.save(encounter);
       } else {
         await setEncounterViewSelection(encounter, { npcId });
-        this.render(false);
+        this.render({ force: false });
         renderInfluenceSidebar();
         renderCinematicHud();
       }
-      return this.render(false);
+      return this.render({ force: false });
     }
     if (action === "request") {
       const selection = encounterViewSelection(encounter);
-      return requestCheck(encounter, event.currentTarget.dataset.type, selection.actorId, selection.npcId);
+      return requestCheck(encounter, target.dataset.type, selection.actorId, selection.npcId);
     }
     if (!game.user.isGM) return ui.notifications.warn(game.i18n.localize("INFLUENCE.GMOnly"));
     let announceInfluenceRewardsAfterSave = false;
     if (action === "adjudicate-request") {
-      const request = encounter.pendingChecks.find((entry) => entry.id === event.currentTarget.dataset.id);
+      const request = encounter.pendingChecks.find((entry) => entry.id === target.dataset.id);
       return request ? adjudicate(request) : ui.notifications.warn("That queued check is no longer available.");
     }
-    if (action === "cancel-request") return cancelPendingCheck(encounter.id, event.currentTarget.dataset.id, "The GM canceled this check request.");
+    if (action === "cancel-request") return cancelPendingCheck(encounter.id, target.dataset.id, "The GM canceled this check request.");
     if (action === "open-for-players") return openEncounterForParticipants(encounter);
     if (action === "pause") return pauseEncounter(encounter.id);
     if (action === "resume") return resumeEncounter(encounter.id);
@@ -2201,7 +2209,7 @@ class InfluenceTracker extends Application {
     } else if (action === "declare-chase-outcome") {
       if (encounter.subsystemType !== "chase" || encounter.chaseOutcome) return;
       if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before declaring the outcome.");
-      const outcome = event.currentTarget.dataset.outcome;
+      const outcome = target.dataset.outcome;
       if (!["victory", "failure"].includes(outcome)) return;
       snapshot(encounter, `Declare chase ${outcome}`);
       encounter.chaseOutcome = outcome;
@@ -2241,7 +2249,7 @@ class InfluenceTracker extends Application {
       } else if (skillEncounter) encounter.skillPoints = Math.max(0, value); else npc.points = Math.max(0, value);
     } else if (action === "change-ip") {
       const npc = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
-      const delta = Number(event.currentTarget.dataset.delta);
+      const delta = Number(target.dataset.delta);
       if (!Number.isFinite(delta) || delta === 0) return;
       const research = encounter.subsystemType === "research";
       const chase = encounter.subsystemType === "chase";
@@ -2260,7 +2268,7 @@ class InfluenceTracker extends Application {
       } else if (skillEncounter) encounter.skillPoints = Math.max(0, Number(encounter.skillPoints) + delta);
       else npc.points = Math.max(0, Number(npc.points) + delta);
     } else if (action === "apply-reward") {
-      const boon = findBoon(encounter, event.currentTarget.dataset.id);
+      const boon = findBoon(encounter, target.dataset.id);
       const targetNpc = encounter.npcs.find((npc) => npc.id === boon?.targetNpcId);
       if (!boon || boon.kind !== "ip" || !targetNpc || boon.applied) return;
       snapshot(encounter, boon.label);
@@ -2279,7 +2287,7 @@ class InfluenceTracker extends Application {
     } else if (action === "declare-skill-outcome") {
       if (encounter.subsystemType !== "skill" || encounter.skillVictoryMode !== "gm") return;
       if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before declaring the outcome.");
-      const outcome = event.currentTarget.dataset.outcome;
+      const outcome = target.dataset.outcome;
       if (!['victory', 'failure'].includes(outcome)) return;
       snapshot(encounter, `Declare ${outcome}`);
       encounter.skillOutcome = outcome;
@@ -2294,14 +2302,14 @@ class InfluenceTracker extends Application {
       encounter.presentationVisible = false;
     } else if (action === "remove-effect") {
       snapshot(encounter, action);
-      encounter.activeEffects = encounter.activeEffects.filter((e) => e.id !== event.currentTarget.dataset.id);
+      encounter.activeEffects = encounter.activeEffects.filter((e) => e.id !== target.dataset.id);
     } else if (action === "resolve-pending-discovery") {
-      const pending = encounter.pendingDiscoveries.find((entry) => entry.id === event.currentTarget.dataset.id);
+      const pending = encounter.pendingDiscoveries.find((entry) => entry.id === target.dataset.id);
       if (!pending) return ui.notifications.info("That Discovery has already been resolved.");
       const selections = await collectDiscoveryChoices(pending.choices, pending.actorId);
       if (!selections.length) return;
       await resolveDiscovery(encounter.id, pending.userId, selections, pending.logEntryId);
-      return this.render(false);
+      return this.render({ force: false });
     } else return;
     await Store.save(encounter);
     if (announceInfluenceRewardsAfterSave) await announceInfluenceRewards(encounter, action === "end-encounter" ? "Final Influence Outcomes" : "Influence Outcomes Revealed");
@@ -2317,7 +2325,7 @@ class InfluenceTracker extends Application {
       return;
     }
     game.socket.emit(SOCKET, { action: "refresh" });
-    this.render(false);
+    this.render({ force: false });
     renderCinematicHud();
     renderInfluenceSidebar();
     if (action === "declare-chase-outcome" && encounter.chaseOutcome === "victory" && encounter.victorySplashMode === "automatic") triggerVictorySplash(Store.get(encounter.id));
@@ -2729,7 +2737,7 @@ async function promptEncounterFolderMove(event, encounterId) {
   const options = [`<option value="">Unfiled</option>`, ...folders.map((folder) => `<option value="${esc(folder.id)}"${folder.id === encounter.folderId ? " selected" : ""}>${esc(folder.name)}</option>`)].join("");
   return foundry.applications.api.DialogV2.prompt({
     window: { title: "Move Encounter to Folder" },
-    content: `<form><div class="form-group"><label>Folder</label><div class="form-fields"><select name="folder">${options}</select></div></div></form>`,
+    content: `<div><div class="form-group"><label>Folder</label><div class="form-fields"><select name="folder">${options}</select></div></div></div>`,
     ok: {
       label: "Move",
       callback: async (_event, button) => moveEncounterToFolder(encounterId, new foundry.applications.ux.FormDataExtended(button.form).object.folder || "")
@@ -2935,7 +2943,7 @@ function showFolderContextMenu(event, folderId) {
     await game.settings.set(MODULE_ID, SETTINGS.encounters, encounters);
     if (deleted.some((encounter) => encounter.id === Store.activeId())) {
       await game.settings.set(MODULE_ID, SETTINGS.active, "");
-      tracker?.render(false);
+      tracker?.render({ force: false });
       renderCinematicHud();
     }
     collapsedInfluenceFolders.delete(folder.id);
@@ -3176,8 +3184,8 @@ async function deleteEncounter(id) {
   const encounter = Store.get(id);
   if (!encounter) return;
   const isActive = Store.activeId() === id;
-  const confirmed = await Dialog.confirm({
-    title: "Delete Influence Encounter",
+  const confirmed = await DialogV2.confirm({
+    window: { title: "Delete Influence Encounter" }, rejectClose: false,
     content: `<p>Delete <strong>${esc(encounter.name)}</strong>?</p><p>${isActive ? "The active encounter will be ended and published to its Journal before its definition is removed." : "This removes the encounter definition."} Its Journal record will remain available unless you delete that separately.</p>`
   });
   if (!confirmed) return;
@@ -3189,7 +3197,7 @@ async function deleteEncounter(id) {
   }
   await Store.remove(id);
   closeEncounterContextMenu();
-  tracker?.render(false);
+  tracker?.render({ force: false });
   renderInfluenceSidebar();
   renderCinematicHud();
   if (game.user.isGM) game.socket.emit(SOCKET, { action: "refresh" });
@@ -3222,7 +3230,7 @@ async function handleSidebarAction(event) {
       : new EncounterEditor(Store.get(id)).render({ force: true });
   }
   if (action === "open") return renderTracker(true);
-  if (action === "manage") return new EncounterManager().render(true);
+  if (action === "manage") return new EncounterManager().render({ force: true });
   const encounter = Store.get();
   if (!encounter) return;
   if (action === "select-participant" && !game.user.isGM) {
@@ -3231,7 +3239,7 @@ async function handleSidebarAction(event) {
     if (encounter.actorsActed?.[actor.id]) return ui.notifications.info(`${actor.name} has already acted this ${["chase", "skill"].includes(encounter.subsystemType) ? "round" : encounter.subsystemType === "research" ? "research interval" : "phase"}.`);
     await setEncounterViewSelection(encounter, { actorId: actor.id });
     renderInfluenceSidebar();
-    tracker?.render(false);
+    tracker?.render({ force: false });
     renderCinematicHud();
     return;
   }
@@ -3240,7 +3248,7 @@ async function handleSidebarAction(event) {
   if (action === "select-npc" && !game.user.isGM) {
     await setEncounterViewSelection(encounter, { npcId: event.currentTarget.dataset.id });
     renderInfluenceSidebar();
-    tracker?.render(false);
+    tracker?.render({ force: false });
     renderCinematicHud();
     return;
   }
@@ -3259,11 +3267,19 @@ async function handleSidebarAction(event) {
 
 async function editNpc(encounter, npc) {
   if (!npc) return;
-  new Dialog({
-    title: "Configure Influence Target",
-    content: `<form><div class="form-group"><label>Name</label><input name="name" value="${esc(npc.name)}"></div><div class="form-group"><label>Nickname</label><input name="nickname" value="${esc(npc.nickname)}" placeholder="Optional short display name"></div><div class="form-group"><label>Portrait</label><file-picker name="image" type="imagevideo" value="${esc(npc.image)}"></file-picker></div><label>Background<textarea name="background">${esc(npc.background)}</textarea></label><label>Appearance<textarea name="appearance">${esc(npc.appearance)}</textarea></label><label>Personality<textarea name="personality">${esc(npc.personality)}</textarea></label><p class="hint">Use Edit Encounter for this target's skills, traits, thresholds, and rewards.</p></form>`,
-    buttons: { save: { icon: '<i class="fa-solid fa-save"></i>', label: "Save", callback: async (html) => { npc.name = html.find('[name="name"]').val()?.trim() || npc.name; npc.nickname = html.find('[name="nickname"]').val()?.trim() || ""; npc.image = html.find('[name="image"]').val()?.trim() || npc.image; npc.background = html.find('[name="background"]').val()?.trim() || ""; npc.appearance = html.find('[name="appearance"]').val()?.trim() || ""; npc.personality = html.find('[name="personality"]').val()?.trim() || ""; await Store.save(encounter); } }, cancel: { label: "Cancel" } }, default: "save"
-  }).render(true);
+  const content = document.createElement("div");
+  content.innerHTML = `<div class="form-group"><label>Name</label><input name="name" value="${esc(npc.name)}"></div><div class="form-group"><label>Nickname</label><input name="nickname" value="${esc(npc.nickname)}" placeholder="Optional short display name"></div><div class="form-group"><label>Portrait</label><file-picker name="image" type="imagevideo" value="${esc(npc.image)}"></file-picker></div><label>Background<textarea name="background">${esc(npc.background)}</textarea></label><label>Appearance<textarea name="appearance">${esc(npc.appearance)}</textarea></label><label>Personality<textarea name="personality">${esc(npc.personality)}</textarea></label><p class="hint">Use Edit Encounter for this target's skills, traits, thresholds, and rewards.</p>`;
+  new DialogV2({
+    window: { title: "Configure Influence Target" }, content,
+    buttons: [{ action: "save", default: true, icon: "fa-solid fa-save", label: "Save", callback: async (_event, button) => {
+      const data = new foundry.applications.ux.FormDataExtended(button.form).object;
+      npc.name = String(data.name ?? "").trim() || npc.name;
+      npc.nickname = String(data.nickname ?? "").trim();
+      npc.image = String(data.image ?? "").trim() || npc.image;
+      for (const field of ["background", "appearance", "personality"]) npc[field] = String(data[field] ?? "").trim();
+      await Store.save(encounter);
+    } }, { action: "cancel", label: "Cancel" }]
+  }).render({ force: true });
 }
 
 async function handleNpcDrop(event) {
@@ -3280,20 +3296,18 @@ async function handleNpcDrop(event) {
   editNpc(encounter, npc);
 }
 
-class EncounterManager extends Application {
-  static get defaultOptions() {
-    return foundry.utils.mergeObject(super.defaultOptions, {
-      id: "influence-encounter-manager", title: "Influence Encounter Manager", template: `modules/${MODULE_ID}/templates/manager.hbs`,
-      width: 760, height: 680, resizable: true, classes: [MODULE_ID]
-    });
-  }
-  getData() { return { encounters: Object.values(Store.all()).map(normalizeEncounterCollections), activeId: Store.activeId() }; }
-  activateListeners(html) {
-    super.activateListeners(html);
-    html.find("[data-action]").on("click", (event) => this._action(event));
-  }
-  async _action(event) {
-    const { action, id } = event.currentTarget.dataset;
+class EncounterManager extends HandlebarsApplicationMixin(ApplicationV2) {
+  static DEFAULT_OPTIONS = {
+    id: "influence-encounter-manager", classes: [MODULE_ID],
+    position: { width: 760, height: 680 },
+    window: { title: "Influence Encounter Manager", resizable: true },
+    actions: Object.fromEntries(["new", "sample", "peace-sample", "research-sample", "chase-sample", "abeo-chase-sample", "edit", "activate", "pause", "resume", "delete", "export", "import"]
+      .map((action) => [action, function(event, target) { return this._action(event, target); }]))
+  };
+  static PARTS = { manager: { template: `modules/${MODULE_ID}/templates/manager.hbs` } };
+  async _prepareContext(options) { return { ...await super._prepareContext(options), encounters: Object.values(Store.all()).map(normalizeEncounterCollections), activeId: Store.activeId() }; }
+  async _action(event, target = event.currentTarget) {
+    const { action, id } = target.dataset;
     if (action === "new") return openCreateEncounterDialog(event);
     if (action === "sample") return new EncounterEditor(deepClone(LANEKAR)).render({ force: true });
     if (action === "peace-sample") return new EncounterEditor(deepClone(PEACE_TALKS)).render({ force: true });
@@ -3303,11 +3317,11 @@ class EncounterManager extends Application {
     if (action === "edit") return new EncounterEditor(Store.get(id)).render({ force: true });
     if (action === "activate") {
       await activateEncounter(id);
-      this.render(false);
+      this.render({ force: false });
     }
-    if (action === "pause") { await pauseEncounter(id); this.render(false); }
-    if (action === "resume") { await resumeEncounter(id); this.render(false); }
-    if (action === "delete") { await deleteEncounter(id); this.render(false); }
+    if (action === "pause") { await pauseEncounter(id); this.render({ force: false }); }
+    if (action === "resume") { await resumeEncounter(id); this.render({ force: false }); }
+    if (action === "delete") { await deleteEncounter(id); this.render({ force: false }); }
     if (action === "export") exportEncounterData(id);
     if (action === "import") importEncounterData();
   }
@@ -3771,7 +3785,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const standard = levelBasedDC(this.encounter.level);
     const adjustments = [["Incredibly Easy", -10], ["Very Easy", -5], ["Easy", -2], ["Standard", 0], ["Hard", 2], ["Very Hard", 5], ["Incredibly Hard", 10]];
     const cells = adjustments.map(([label, adjustment]) => `<tr><th>${label}</th><td>${standard + adjustment}</td><td>${signed(adjustment)}</td></tr>`).join("");
-    new Dialog({ title: `Level ${this.encounter.level} DC Reference`, content: `<table class="dc-reference-grid"><thead><tr><th>Difficulty</th><th>DC</th><th>Adjustment</th></tr></thead><tbody>${cells}</tbody></table>`, buttons: { close: { label: "Close" } }, default: "close" }).render(true);
+    new DialogV2({ window: { title: `Level ${this.encounter.level} DC Reference` }, content: `<table class="dc-reference-grid"><thead><tr><th>Difficulty</th><th>DC</th><th>Adjustment</th></tr></thead><tbody>${cells}</tbody></table>`, buttons: [{ action: "close", label: "Close", default: true }] }).render({ force: true });
   }
   static async #onUnlink(_event, target) {
     this._capture();
@@ -3901,26 +3915,16 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   }
   async close(options = {}) {
     if (this._forceClose || !this._dirty) return super.close(options);
-    const choice = await new Promise((resolve) => {
-      let resolved = false;
-      const finish = (value) => {
-        if (resolved) return;
-        resolved = true;
-        resolve(value);
-      };
-      new Dialog({
-        title: "Unsaved Encounter Changes",
-        content: `<p>You have unsaved changes to <strong>${esc(this.encounter.name)}</strong>. Closing without saving will discard them.</p>`,
-        buttons: {
-          save: { icon: '<i class="fa-solid fa-floppy-disk"></i>', label: "Save and Close", callback: () => finish("save") },
-          cancel: { icon: '<i class="fa-solid fa-xmark"></i>', label: "Cancel", callback: () => finish("cancel") },
-          discard: { icon: '<i class="fa-solid fa-trash"></i>', label: "Close Without Saving", callback: () => finish("discard") }
-        },
-        default: "cancel",
-        close: () => finish("cancel")
-      }).render(true);
+    const choice = await DialogV2.wait({
+      window: { title: "Unsaved Encounter Changes" }, rejectClose: false,
+      content: `<p>You have unsaved changes to <strong>${esc(this.encounter.name)}</strong>. Closing without saving will discard them.</p>`,
+      buttons: [
+        { action: "save", icon: "fa-solid fa-floppy-disk", label: "Save and Close" },
+        { action: "cancel", icon: "fa-solid fa-xmark", label: "Cancel", default: true },
+        { action: "discard", icon: "fa-solid fa-trash", label: "Close Without Saving" }
+      ]
     });
-    if (choice === "cancel") return this;
+    if (!choice || choice === "cancel") return this;
     if (choice === "save") {
       const formData = new foundry.applications.ux.FormDataExtended(this.element).object;
       if (await this._save(formData) === false) return this;
@@ -3954,7 +3958,7 @@ async function assignStarshipRole(payload) {
     delete encounter.starship.roleSelections[actor.id];
     delete encounter.starship.actionSelections[actor.id];
     await Store.save(encounter);
-    tracker?.render(true);
+    tracker?.render({ force: true });
     game.socket.emit(SOCKET, { action: "refresh" });
     return;
   }
@@ -3967,7 +3971,7 @@ async function assignStarshipRole(payload) {
   encounter.starship.roleSelections[actor.id] = role.id;
   encounter.starship.actionSelections[actor.id] = {};
   await Store.save(encounter);
-  tracker?.render(true);
+  tracker?.render({ force: true });
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
@@ -3985,7 +3989,7 @@ async function setStarshipActionSelection(encounter, actorId, activityId, skillS
     starshipSkillSlug: selectedSkill,
     starshipRound: Number(encounter.currentRound)
   });
-  tracker?.render(false);
+  tracker?.render({ force: false });
   game.socket.emit(SOCKET, payload);
 }
 
@@ -4001,7 +4005,7 @@ async function saveStarshipActionSelection(payload) {
   if (!skill) return;
   encounter.starship.actionSelections[actor.id] = { activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label };
   await Store.save(encounter);
-  tracker?.render(true);
+  tracker?.render({ force: true });
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
@@ -4131,11 +4135,11 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
       ? `${knownOptions}${knownOptions && attemptOptions ? '<option disabled>──────────</option>' : ""}${attemptOptions}`
       : knownOptions;
   }
-  new Dialog({
-    title: `Make a Check: ${npcName}`,
-    content: `<form><p>${isResearch ? "Source" : "Target"}: <strong>${esc(npcName)}</strong></p>${isResearch && npc.requirements ? `<p class="hint"><strong>Requirements:</strong> ${esc(npc.requirements)}</p>` : ""}<div class="form-group"><label>Skill</label><select name="skill">${options}</select></div></form>`,
-    buttons: { request: { icon: '<i class="fas fa-paper-plane"></i>', label: "Request Check", callback: (html) => {
-      const selection = String(html.find('[name="skill"]').val());
+  new DialogV2({
+    window: { title: `Make a Check: ${npcName}` },
+    content: `<div><p>${isResearch ? "Source" : "Target"}: <strong>${esc(npcName)}</strong></p>${isResearch && npc.requirements ? `<p class="hint"><strong>Requirements:</strong> ${esc(npc.requirements)}</p>` : ""}<div class="form-group"><label>Skill</label><select name="skill">${options}</select></div></div>`,
+    buttons: [{ action: "request", default: true, icon: "fas fa-paper-plane", label: "Request Check", callback: (_event, button) => {
+      const selection = String(button.form.elements.skill.value);
       const [source, value] = selection.split(":");
       const actorChoice = source === "actor" ? trainedAttemptSkills(actor, npc).find((skill) => skill.slug === value) : null;
       const configuredChoice = source === "configured" ? selectableSkills.find((skill) => skill.id === value) : null;
@@ -4145,8 +4149,8 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
         skillSlug: actorChoice?.slug ?? (anyLore ? configuredChoice?.slug : null),
         skillLabel: actorChoice?.label ?? (anyLore ? configuredChoice?.label : null), anyLore, diverseLore: !!configuredChoice?.diverseLore };
       if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
-    } } }
-  }).render(true);
+    } }]
+  }).render({ force: true });
 }
 
 function applicableBoons(encounter, request, skill) {
@@ -4189,7 +4193,7 @@ async function cancelPendingCheck(encounterId, requestId, reason) {
   await Store.save(encounter);
   game.socket.emit(SOCKET, { action: "refresh" });
   await notifyPendingCheck(request, reason);
-  tracker?.render(false);
+  tracker?.render({ force: false });
 }
 
 async function enqueueCheckRequest(payload) {
@@ -4223,7 +4227,7 @@ async function enqueueCheckRequest(payload) {
   await ChatMessage.create({ content: `<div class="influence-chat influence-check-request"><strong>Check Requested</strong><p>${requestLine}</p></div>` });
   game.socket.emit(SOCKET, { action: "check-request-status", userId: request.requesterId, message: `${actorName}'s check request is queued for the GM.` });
   game.socket.emit(SOCKET, { action: "refresh" });
-  tracker?.render(false);
+  tracker?.render({ force: false });
   if (!adjudicationOpen) adjudicate(request);
 }
 
@@ -4272,7 +4276,7 @@ async function adjudicate(request) {
   encounter.activeNpcId = npc.id;
   await Store.save(encounter);
   game.socket.emit(SOCKET, { action: "refresh" });
-  tracker?.render(false);
+  tracker?.render({ force: false });
   renderCinematicHud();
   renderInfluenceSidebar();
   const mods = [
@@ -4288,42 +4292,46 @@ async function adjudicate(request) {
     : skill.invalidInfluence
       ? `<p class="hint"><strong>GM:</strong> This is not a configured Influence skill for this target. The roll consumes the character's action and resolves as a failure.</p>`
       : "";
-  const content = `<form class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></form>`;
+  const content = `<div class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></div>`;
   const adjudicationContent = request.type === "research" ? content.replace(" influences ", " researches ") : request.type === "chase" ? content.replace(" influences ", " attempts ") : request.type === "skill" ? content.replace(" influences ", " tackles ") : content;
   adjudicationOpen = true;
-  new Dialog({
-    title: `Adjudicate ${request.type === "research" ? "Research" : request.type === "chase" ? "Chase" : request.type === "skill" ? "Skill Encounter" : "Influence"} Check`, content: adjudicationContent,
-    render: (html) => {
-      const renderCustomMods = () => html.find(".custom-modifiers").html(customMods.map((mod) => `<div class="custom-modifier"><span><strong>${esc(mod.label)}</strong> ${signed(mod.value)} (${esc(mod.type)})${mod.persist ? " — kept" : ""}</span><button type="button" data-remove-custom="${mod.id}" title="Remove modifier"><i class="fas fa-times"></i></button></div>`).join(""));
-      html.find('[data-action="add-custom"]').on("click", () => {
-        const value = Number(html.find('[name="customValue"]').val());
+  DialogV2.wait({
+    window: { title: `Adjudicate ${request.type === "research" ? "Research" : request.type === "chase" ? "Chase" : request.type === "skill" ? "Skill Encounter" : "Influence"} Check` }, position: { width: 520 }, content: adjudicationContent,
+    render: (_event, app) => {
+      const html = app.element;
+      const renderCustomMods = () => html.querySelector(".custom-modifiers").innerHTML = customMods.map((mod) => `<div class="custom-modifier"><span><strong>${esc(mod.label)}</strong> ${signed(mod.value)} (${esc(mod.type)})${mod.persist ? " — kept" : ""}</span><button type="button" data-remove-custom="${mod.id}" title="Remove modifier"><i class="fas fa-times"></i></button></div>`).join("");
+      html.querySelector('[data-action="add-custom"]').addEventListener("click", () => {
+        const value = Number(html.querySelector('[name="customValue"]')?.value);
         if (!Number.isFinite(value) || value === 0) return ui.notifications.warn("Enter a non-zero modifier before adding it.");
-        customMods.push({ id: randomID(), label: html.find('[name="customLabel"]').val()?.trim() || "Situational Modifier",
-          value, type: html.find('[name="customType"]').val(), persist: html.find('[name="saveCustom"]').is(":checked") });
-        html.find('[name="customLabel"]').val("");
-        html.find('[name="customValue"]').val(0);
-        html.find('[name="saveCustom"]').prop("checked", false);
+        customMods.push({ id: randomID(), label: html.querySelector('[name="customLabel"]')?.value?.trim() || "Situational Modifier",
+          value, type: html.querySelector('[name="customType"]')?.value, persist: html.querySelector('[name="saveCustom"]').checked });
+        html.querySelector('[name="customLabel"]').value = "";
+        html.querySelector('[name="customValue"]').value = 0;
+        html.querySelector('[name="saveCustom"]').checked = false;
         renderCustomMods();
       });
-      html.find(".custom-modifiers").on("click", "[data-remove-custom]", (event) => {
-        const index = customMods.findIndex((mod) => mod.id === event.currentTarget.dataset.removeCustom);
+      html.querySelector(".custom-modifiers").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-remove-custom]");
+        if (!button) return;
+        const index = customMods.findIndex((mod) => mod.id === button.dataset.removeCustom);
         if (index >= 0) customMods.splice(index, 1);
         renderCustomMods();
       });
     },
-    buttons: {
-      roll: { icon: '<i class="fas fa-dice-d20"></i>', label: "Confirm and Roll", callback: async (html) => {
-        const selectedIds = html.find('[name="mod"]:checked').map((_, e) => e.value).get();
+    buttons: [
+      { action: "roll", default: true, icon: "fas fa-dice-d20", label: "Confirm and Roll", callback: async (_event, button) => {
+        const html = button.form;
+        const selectedIds = Array.from(html.querySelectorAll('[name="mod"]:checked'), (element) => element.value);
         const selected = mods.map((m) => ({ ...m, selected: m.enforced || selectedIds.includes(m.id) }));
         selected.push(...customMods.map((mod) => ({ ...mod, selected: true })));
         const boonDcAdjust = selected.filter((m) => m.selected && m.mode === "dc").reduce((sum, m) => sum + Number(m.value), 0);
-        const dcAdjust = (Number(html.find('[name="dcAdjust"]').val()) || 0) + boonDcAdjust;
+        const dcAdjust = (Number(html.querySelector('[name="dcAdjust"]')?.value) || 0) + boonDcAdjust;
         encounter.activeEffects.push(...customMods.filter((mod) => mod.persist).map((mod) => ({ id: randomID(), kind: "modifier", targetNpcId: npc.id, label: mod.label, value: mod.value, type: mod.type, mode: "roll", scope: "both", skills: [], uses: 999, remaining: 999 })));
         await executeCheck(encounter, request, actor, skill, selected.filter((m) => m.selected), dcAdjust);
       } },
-      cancel: { label: "Return to Queue" }
-    }, default: "roll", close: () => { adjudicationOpen = false; }
-  }, { width: 520 }).render(true);
+      { action: "cancel", label: "Return to Queue" }
+    ], close: () => { adjudicationOpen = false; }
+  });
 }
 
 async function adjudicateStarship(request, encounter, actor) {
@@ -4340,34 +4348,38 @@ async function adjudicateStarship(request, encounter, actor) {
   const rows = mods.map((modifier) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${esc(modifier.id)}"> <strong>${esc(modifier.label)}</strong> ${signed(Number(modifier.value))}<small>${esc(modifier.description ?? "")}</small></label>`).join("");
   const customMods = [];
   adjudicationOpen = true;
-  new Dialog({
-    title: `Adjudicate ${role.label}: ${activity.label}`,
-    content: `<form class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> uses <strong>${esc(skill.label)}</strong> for <strong>${esc(activity.label)}</strong> against DC ${activity.dc}.</p>${rows}<hr><h4>Additional modifier</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"></div></form>`,
-    render: (html) => {
-      const renderCustomMods = () => html.find(".custom-modifiers").html(customMods.map((mod) => `<div class="custom-modifier"><span><strong>${esc(mod.label)}</strong> ${signed(mod.value)} (${esc(mod.type)})</span><button type="button" data-remove-custom="${mod.id}"><i class="fas fa-times"></i></button></div>`).join(""));
-      html.find('[data-action="add-custom"]').on("click", () => {
-        const value = Number(html.find('[name="customValue"]').val());
+  DialogV2.wait({
+    window: { title: `Adjudicate ${role.label}: ${activity.label}` }, position: { width: 560 },
+    content: `<div class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> uses <strong>${esc(skill.label)}</strong> for <strong>${esc(activity.label)}</strong> against DC ${activity.dc}.</p>${rows}<hr><h4>Additional modifier</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"></div></div>`,
+    render: (_event, app) => {
+      const html = app.element;
+      const renderCustomMods = () => html.querySelector(".custom-modifiers").innerHTML = customMods.map((mod) => `<div class="custom-modifier"><span><strong>${esc(mod.label)}</strong> ${signed(mod.value)} (${esc(mod.type)})</span><button type="button" data-remove-custom="${mod.id}"><i class="fas fa-times"></i></button></div>`).join("");
+      html.querySelector('[data-action="add-custom"]').addEventListener("click", () => {
+        const value = Number(html.querySelector('[name="customValue"]')?.value);
         if (!Number.isFinite(value) || value === 0) return ui.notifications.warn("Enter a non-zero modifier before adding it.");
-        customMods.push({ id: randomID(), label: html.find('[name="customLabel"]').val()?.trim() || "Situational Modifier", value, type: html.find('[name="customType"]').val(), mode: "roll" });
-        html.find('[name="customLabel"]').val("");
-        html.find('[name="customValue"]').val(0);
+        customMods.push({ id: randomID(), label: html.querySelector('[name="customLabel"]')?.value?.trim() || "Situational Modifier", value, type: html.querySelector('[name="customType"]')?.value, mode: "roll" });
+        html.querySelector('[name="customLabel"]').value = "";
+        html.querySelector('[name="customValue"]').value = 0;
         renderCustomMods();
       });
-      html.find(".custom-modifiers").on("click", "[data-remove-custom]", (event) => {
-        const index = customMods.findIndex((mod) => mod.id === event.currentTarget.dataset.removeCustom);
+      html.querySelector(".custom-modifiers").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-remove-custom]");
+        if (!button) return;
+        const index = customMods.findIndex((mod) => mod.id === button.dataset.removeCustom);
         if (index >= 0) customMods.splice(index, 1);
         renderCustomMods();
       });
     },
-    buttons: {
-      roll: { icon: '<i class="fas fa-dice-d20"></i>', label: "Confirm and Roll", callback: async (html) => {
-        const selectedIds = html.find('[name="mod"]:checked').map((_, element) => element.value).get();
+    buttons: [
+      { action: "roll", default: true, icon: "fas fa-dice-d20", label: "Confirm and Roll", callback: async (_event, button) => {
+        const html = button.form;
+        const selectedIds = Array.from(html.querySelectorAll('[name="mod"]:checked'), (element) => element.value);
         const selected = [...mods.filter((modifier) => selectedIds.includes(modifier.id)), ...customMods];
-        await executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, Number(html.find('[name="dcAdjust"]').val()) || 0);
+        await executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, Number(html.querySelector('[name="dcAdjust"]')?.value) || 0);
       } },
-      cancel: { label: "Return to Queue" }
-    }, default: "roll", close: () => { adjudicationOpen = false; }
-  }, { width: 560 }).render(true);
+      { action: "cancel", label: "Return to Queue" }
+    ], close: () => { adjudicationOpen = false; }
+  });
 }
 
 async function executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, dcAdjust) {
@@ -4423,7 +4435,7 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   await announceStarshipOutcome(encounter, priorStarshipOutcome);
   game.socket.emit(SOCKET, { action: "refresh" });
   await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(role.label)}</strong><p>${esc(actorName)} used ${esc(skill.label)} for ${esc(activity.label)}: <strong>${outcome}</strong>.</p>${damageReport}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
-  tracker?.render(false);
+  tracker?.render({ force: false });
 }
 
 async function executeCheck(encounter, request, actor, skill, selected, dcAdjust) {
@@ -4638,7 +4650,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   }
   if (request.type === "discovery" && !skill.invalidDiscovery && degree >= 2) await offerDiscovery(encounter, request.requesterId, degree === 3 ? 2 : 1, logEntry.id, actor.id);
   await maybePromptRoundAdvance(Store.get(encounter.id));
-  tracker.render(false);
+  tracker.render({ force: false });
 }
 
 async function offerDiscovery(encounter, userId, choices, logEntryId, actorId) {
@@ -4717,7 +4729,7 @@ async function resolveDiscovery(encounterId, userId, selections, logEntryId) {
   }
   await Store.save(encounter);
   game.socket.emit(SOCKET, { action: "refresh", userId });
-  tracker?.render(false);
+  tracker?.render({ force: false });
 }
 
 async function resumePendingDiscoveries() {
@@ -4730,26 +4742,29 @@ async function resumePendingDiscoveries() {
   }
 }
 
-function promptNumber(title, value) { return new Promise((resolve) => new Dialog({ title, content: `<input type="number" name="value" value="${value}">`, buttons: { ok: { label: "Apply", callback: (h) => resolve(Number(h.find('[name="value"]').val())) }, cancel: { label: "Cancel", callback: () => resolve(null) } }, close: () => resolve(null) }).render(true)); }
-function promptSelect(title, options, confirmLabel = "Reveal") { return new Promise((resolve) => new Dialog({ title, content: `<select name="value">${options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select>`, buttons: { ok: { label: confirmLabel, callback: (h) => resolve(h.find('[name="value"]').val()) }, cancel: { label: "Cancel", callback: () => resolve(null) } }, close: () => resolve(null) }).render(true)); }
+async function promptNumber(title, value) {
+  const result = await DialogV2.prompt({ window: { title }, rejectClose: false, content: `<input type="number" name="value" value="${value}">`,
+    buttons: [{ action: "cancel", label: "Cancel", callback: () => false }],
+    ok: { label: "Apply", callback: (_event, button) => Number(button.form.elements.value.value) } });
+  return result === false ? null : result;
+}
+async function promptSelect(title, options, confirmLabel = "Reveal") {
+  const result = await DialogV2.prompt({ window: { title }, rejectClose: false, content: `<select name="value">${options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select>`,
+    buttons: [{ action: "cancel", label: "Cancel", callback: () => false }],
+    ok: { label: confirmLabel, callback: (_event, button) => button.form.elements.value.value } });
+  return result === false ? null : result;
+}
 
 let tracker;
 
-/**
- * The tracker deliberately remains an ApplicationV1 compatibility window for
- * its established system-styled surface. A freshly closed V1 instance can be
- * in its short closing transition when an encounter is resumed, so replace it
- * before asking Foundry to show the window again.
- */
 function renderTracker(force = true) {
-  if (!tracker || tracker.closing) tracker = new InfluenceTracker();
-  tracker.options.title = Store.get()?.subsystemType === "starship" ? "Starship Encounter" : "Influence Encounter";
-  return tracker.render(force);
+  if (!tracker || tracker.state === ApplicationV2.RENDER_STATES.CLOSING) tracker = new InfluenceTracker();
+  return tracker.render({ force });
 }
 
 function refreshTrackerForEncounterState() {
   const encounter = Store.get();
-  if (encounter?.status === "active") return tracker?.render(false);
+  if (encounter?.status === "active") return tracker?.render({ force: false });
   return tracker?.close();
 }
 Hooks.once("init", () => {
@@ -4788,7 +4803,7 @@ Hooks.once("init", () => {
     restricted: true,
     requiresReload: false
   });
-  loadTemplates([
+  foundry.applications.handlebars.loadTemplates([
     `modules/${MODULE_ID}/templates/trait-fields.hbs`,
     `modules/${MODULE_ID}/templates/sidebar.hbs`,
     `modules/${MODULE_ID}/templates/tracker.hbs`,
@@ -4829,7 +4844,7 @@ Hooks.once("ready", async () => {
       renderInfluenceSidebar();
     }
   });
-  game[MODULE_ID] = { open: () => renderTracker(true), manage: () => new EncounterManager().render(true), Store };
+  game[MODULE_ID] = { open: () => renderTracker(true), manage: () => new EncounterManager().render({ force: true }), Store };
   setTimeout(() => { renderInfluenceSidebar(); renderCinematicHud(); }, 250);
   setTimeout(() => { const active = Store.get(); if (active?.status === "active") renderTracker(true); }, 350);
   setTimeout(() => resumePendingDiscoveries(), 500);
@@ -4840,10 +4855,8 @@ function markInfluenceChatMessage(message, html) {
   if (!kind && message.whisper?.length && /<strong>Discovery:/i.test(message.content ?? "")) kind = "discovery-reveal";
   if (!kind && /influence-result/.test(message.content ?? "")) kind = "result";
   if (!kind) return;
-  const element = html instanceof HTMLElement ? html : html?.[0];
-  element?.classList.add(`influence-${kind}-message`);
+  html.classList.add(`influence-${kind}-message`);
 }
-Hooks.on("renderChatMessage", markInfluenceChatMessage);
 Hooks.on("renderChatMessageHTML", markInfluenceChatMessage);
 Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); });
 
@@ -4889,7 +4902,7 @@ Hooks.on("influenceEncounterUpdated", (id) => {
   // The directory must refresh for draft encounters too, not only the active one.
   renderInfluenceSidebar();
   if (id === Store.activeId()) {
-    tracker?.render(false);
+    tracker?.render({ force: false });
     renderCinematicHud();
     if (game.user.isGM) game.socket.emit(SOCKET, { action: "refresh" });
   }
