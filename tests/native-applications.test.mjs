@@ -137,6 +137,23 @@ test("Lore picker filters examples, selects examples, normalizes custom Lore, an
   assert.equal(await result, null);
 });
 
+test("typed DC adjustments use PF2e stacking rules", () => {
+  const resolveTypedDcAdjustment = new Function(
+    `${between("function resolveTypedDcAdjustment", "function applicableBoons")}\nreturn resolveTypedDcAdjustment;`
+  )();
+  assert.equal(resolveTypedDcAdjustment([
+    { type: "circumstance", value: 2 },
+    { type: "circumstance", value: 2 }
+  ]), 2, "same-type circumstance bonuses do not stack");
+  assert.equal(resolveTypedDcAdjustment([
+    { type: "circumstance", value: 1 },
+    { type: "circumstance", value: 2 },
+    { type: "status", value: -1 },
+    { type: "status", value: -2 },
+    { type: "untyped", value: 1 }
+  ]), 1, "use the largest typed bonus, worst typed penalty, and all untyped adjustments");
+});
+
 test("target dialog trusts native file-picker markup and saves the native form data", async () => {
   let config, saved;
   const content = { innerHTML: "" };

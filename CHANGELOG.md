@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.16 — 2026-10-27
+
+- Fixed typed DC adjustments stacking incorrectly. Circumstance, status, and item adjustments now use Pathfinder 2e stacking rules, while untyped adjustments continue to stack.
+
 ## 0.8.15 — 2026-10-27
 
 - Fixed long encounter trackers clipping player-visible rewards, boons, and other content below the application window. The tracker now uses a native V14 scroll region while keeping the editor and manager layouts unchanged.

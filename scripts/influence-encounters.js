@@ -4153,6 +4153,25 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
   }).render({ force: true });
 }
 
+function resolveTypedDcAdjustment(modifiers) {
+  const typed = new Map();
+  let total = 0;
+  for (const modifier of modifiers) {
+    const value = Number(modifier.value);
+    if (!Number.isFinite(value) || value === 0) continue;
+    const type = modifier.type || "untyped";
+    if (type === "untyped") {
+      total += value;
+      continue;
+    }
+    const current = typed.get(type) ?? { bonus: 0, penalty: 0 };
+    if (value > 0) current.bonus = Math.max(current.bonus, value);
+    else current.penalty = Math.min(current.penalty, value);
+    typed.set(type, current);
+  }
+  return total + [...typed.values()].reduce((sum, entry) => sum + entry.bonus + entry.penalty, 0);
+}
+
 function applicableBoons(encounter, request, skill) {
   const unlocked = encounter.subsystemType === "research"
     ? encounter.researchThresholds.flatMap((threshold) => threshold.points <= encounter.researchPoints ? threshold.boons : [])
@@ -4324,7 +4343,7 @@ async function adjudicate(request) {
         const selectedIds = Array.from(html.querySelectorAll('[name="mod"]:checked'), (element) => element.value);
         const selected = mods.map((m) => ({ ...m, selected: m.enforced || selectedIds.includes(m.id) }));
         selected.push(...customMods.map((mod) => ({ ...mod, selected: true })));
-        const boonDcAdjust = selected.filter((m) => m.selected && m.mode === "dc").reduce((sum, m) => sum + Number(m.value), 0);
+        const boonDcAdjust = resolveTypedDcAdjustment(selected.filter((m) => m.selected && m.mode === "dc"));
         const dcAdjust = (Number(html.querySelector('[name="dcAdjust"]')?.value) || 0) + boonDcAdjust;
         encounter.activeEffects.push(...customMods.filter((mod) => mod.persist).map((mod) => ({ id: randomID(), kind: "modifier", targetNpcId: npc.id, label: mod.label, value: mod.value, type: mod.type, mode: "roll", scope: "both", skills: [], uses: 999, remaining: 999 })));
         await executeCheck(encounter, request, actor, skill, selected.filter((m) => m.selected), dcAdjust);
