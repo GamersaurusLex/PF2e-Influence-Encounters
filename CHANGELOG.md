@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.15 — 2026-10-27
+
+- Fixed long encounter trackers clipping player-visible rewards, boons, and other content below the application window. The tracker now uses a native V14 scroll region while keeping the editor and manager layouts unchanged.
+
 ## 0.8.14 — 2026-10-25
 
 - Migrated the encounter tracker and manager to Foundry v14's native ApplicationV2 framework, including native tabs and action dispatch.

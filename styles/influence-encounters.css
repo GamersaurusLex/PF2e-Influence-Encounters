@@ -1,7 +1,9 @@
 .influence-encounters .window-content { padding: 0; }
+#influence-encounter-tracker .window-content { display: flex; min-height: 0; overflow: hidden; }
 .influence-encounters button { width: auto; }
 .influence-journal-button { flex: 0 0 auto; }
-.influence-tracker, .influence-manager { padding: 1rem; }
+.influence-tracker { flex: 1 1 auto; min-height: 0; padding: 1rem; overflow-y: auto; overscroll-behavior: contain; }
+.influence-manager { padding: 1rem; }
 .influence-tracker button, .influence-manager button { height: auto; min-height: var(--input-height); white-space: normal; }
 .influence-tracker footer, .influence-manager .toolbar { flex-wrap: wrap; }
 .encounter-header { display: grid; grid-template-columns: 72px 1fr auto; gap: 1rem; align-items: center; border-bottom: 1px solid var(--color-border-light-2); padding-bottom: .75rem; }
