@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.17 — 2026-10-28
+
+- Added a persistent player-facing **Your Action** dock at the top of every encounter tracker. Approved checks now expose their **Roll** or **Submit Final Result** control above the encounter detail and remain visible while the player scrolls.
+- Kept player-owned rolls public for Influence, Chase, Research, Skill, and Starship encounters, while Discovery checks remain GM blind. The tracker now clearly distinguishes a roll awaiting a Hero Point decision from a completed submission.
+- Added GM recovery controls for pending player checks, including manual resolution, reopening a player roll, forgetting a stuck request, and canceling it.
+
 ## 0.8.16 — 2026-10-27
 
 - Fixed typed DC adjustments stacking incorrectly. Circumstance, status, and item adjustments now use Pathfinder 2e stacking rules, while untyped adjustments continue to stack.

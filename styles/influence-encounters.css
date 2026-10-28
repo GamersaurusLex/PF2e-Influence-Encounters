@@ -136,6 +136,25 @@
 .pending-check-queue article > div { display: grid; min-width: 0; }
 .pending-check-queue article small { color: var(--color-text-secondary); }
 .pending-check-queue article button { margin: 0; white-space: nowrap; }
+.player-roll-queue { margin: 1rem 0; padding: .75rem; border: 1px solid var(--color-border-highlight); border-radius: 8px; background: color-mix(in srgb, var(--color-bg-option) 88%, var(--color-warm-2, #9f6b3f)); }
+.player-roll-queue h3 { margin-top: 0; }
+.player-roll-queue article { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .45rem 0; border-top: 1px solid var(--color-border-light-2); }
+.player-roll-queue article:first-of-type { border-top: 0; }
+.player-roll-queue article > div { display: grid; gap: .15rem; min-width: 0; }
+.player-roll-queue article small { color: var(--color-text-secondary); }
+.player-roll-queue article button { flex: 0 0 auto; margin: 0; white-space: nowrap; }
+.player-action-dock { position: sticky; top: .35rem; z-index: 3; margin: .25rem 0 .75rem; box-shadow: 0 .45rem .85rem color-mix(in srgb, var(--color-shadow-dark) 28%, transparent); }
+.player-action-dock h3 { display: flex; align-items: center; gap: .45rem; }
+.player-action-dock h3::before { content: ""; width: .55rem; height: .55rem; border-radius: 50%; background: var(--color-warm-1, #d69b52); box-shadow: 0 0 .5rem var(--color-warm-1, #d69b52); }
+@media (max-width: 700px) {
+  .influence-tracker.player-view { padding: .75rem; }
+  .influence-tracker.player-view .encounter-header { grid-template-columns: 56px minmax(0, 1fr) auto; gap: .65rem; padding-bottom: .5rem; }
+  .influence-tracker.player-view .encounter-header img { width: 56px; height: 56px; }
+  .influence-tracker.player-view .encounter-header h2 { font-size: 1.35rem; line-height: 1.12; }
+  .influence-tracker.player-view .encounter-header p { margin: .15rem 0 0; font-size: .9rem; }
+  .influence-tracker.player-view .tracker-tabs { margin: .45rem 0; }
+  .influence-tracker.player-view .player-action-dock { top: .2rem; margin-top: .15rem; }
+}
 .queue-position { display: grid; place-items: center; width: 1.7rem; height: 1.7rem; border-radius: 50%; background: var(--color-bg-option); font-weight: 700; }
 .source-parser { margin-bottom: 1rem; padding: .75rem; border: 1px dashed var(--color-border-light-2); border-radius: 6px; background: color-mix(in srgb, var(--color-bg-option) 65%, transparent); }
 .source-parser textarea { min-height: 8rem; margin-bottom: .5rem; }

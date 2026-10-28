@@ -41,6 +41,83 @@ test("every tracker and manager template action is registered with native dispat
   }
 });
 
+test("approved checks expose deliberate player roll and final-submit states", () => {
+  const checks = new Function(
+    "game", "participantDisplayName", "starshipShip", "starshipActivityFor", "targetDisplayName", "PLAYER_ROLL_STATES",
+    `${between("function playerRollChecks", "function starshipTrackerContext")}
+return playerRollChecks;`
+  )(
+    { user: { id: "player", isGM: true }, actors: { get: id => ({ id, name: "Testy" }) } },
+    (_encounter, actor) => actor.name,
+    () => null,
+    () => null,
+    target => target?.name ?? "Target",
+    new Set(["awaiting-player-roll", "awaiting-final-result"])
+  );
+  const encounter = {
+    npcs: [{ id: "npc", name: "Lanekar" }],
+    pendingChecks: [
+      { id: "roll", requesterId: "player", actorId: "actor", npcId: "npc", status: "awaiting-player-roll", approval: { skill: { label: "Diplomacy" } } },
+      { id: "submit", requesterId: "player", actorId: "actor", npcId: "npc", status: "awaiting-final-result", approval: { skill: { label: "Society" } } }
+    ]
+  };
+  const [roll, submit] = checks(encounter);
+  assert.deepEqual({ canRoll: roll.canRoll, canSubmit: roll.canSubmit }, { canRoll: true, canSubmit: false });
+  assert.deepEqual({ canRoll: submit.canRoll, canSubmit: submit.canSubmit }, { canRoll: false, canSubmit: true });
+});
+
+test("player roll actions stay above the scrollable encounter detail", async () => {
+  for (const template of ["tracker", "starship-tracker"]) {
+    const html = await readFile(new URL(`../templates/${template}.hbs`, import.meta.url), "utf8");
+    const dock = html.indexOf('class="player-roll-queue player-action-dock"');
+    const precedingNav = html.lastIndexOf("tracker-tabs", dock);
+    const content = html.indexOf('class="tracker-content"', dock);
+    assert.ok(dock >= 0, `${template} supplies an immediate player action dock`);
+    assert.ok(precedingNav < dock && dock < content, `${template} places the action dock before scrollable encounter details`);
+  }
+  const css = await readFile(new URL("../styles/influence-encounters.css", import.meta.url), "utf8");
+  assert.match(css, /\.player-action-dock \{ position: sticky;/);
+  assert.match(css, /\.influence-tracker\.player-view \.encounter-header/);
+});
+
+test("approved player rolls use PF2e's native visible-or-blind card and preserve reroll tracking", () => {
+  const approvedRoll = between("async function openApprovedPlayerRoll", "function reportPlayerRoll");
+  assert.match(approvedRoll, /messageMode:\s*request\.type === ["']discovery["'] \? ["']blind["'] : ["']public["']/);
+  assert.match(approvedRoll, /skipDialog:\s*true/);
+  const rerollTracking = between("async function trackPlayerRollMessage", "Hooks.on(\"preDeleteChatMessage\"");
+  assert.match(rerollTracking, /Object\.values\(Store\.all\(\)\)/);
+  assert.match(rerollTracking, /message\.rolls\?\.at\(-1\)/);
+  assert.match(source, /Hooks\.on\(["']preDeleteChatMessage["']/);
+  assert.match(source, /Hooks\.on\(["']updateChatMessage["']/);
+  assert.match(source, /check:reroll/);
+});
+
+test("creative approaches and recovery controls use the shared check pipeline", () => {
+  assert.match(source, /const attempts = speculativeAttemptSkills\(actor, npc, knownSkills\);/);
+  assert.match(source, /function starshipProposalChoices\(actor, activity\)/);
+  assert.match(source, /proposed: !!localSelection\.starshipProposed/);
+  assert.match(source, /Treat <strong>\$\{esc\(skill\.label\)\}<\/strong> as valid for this check/);
+  assert.match(source, /async function resolveCheckManually\(/);
+  assert.match(source, /async function reopenPlayerRoll\(/);
+  assert.match(source, /async function forgetPendingCheck\(/);
+  const manualResolution = between("async function resolveApprovedCheckManually", "async function resolveCheckManually");
+  assert.match(manualResolution, /requestedDegree !== null/);
+  assert.match(manualResolution, /requestedDegree !== undefined/);
+  assert.match(manualResolution, /degreeOfSuccess: degree, manual: true/);
+  assert.doesNotMatch(manualResolution, /includes\(Number\(requestedDegree\)\) \? Number\(requestedDegree\)/,
+    "a dismissed prompt must not coerce null into critical failure");
+  const executeCheck = between("async function executeCheck", "async function offerDiscovery");
+  assert.match(executeCheck, /request\.type !== "discovery" \|\| \(!skill\.invalidDiscovery && degree >= 2\)/,
+    "successful Discovery checks receive a public sanitized result card");
+  assert.match(executeCheck, /GM Adjudicated \$\{outcome\}/,
+    "manual results are clearly identified without inventing a dice roll");
+  assert.match(executeCheck, /messageMode:\s*request\.type === ["']discovery["'] \? ["']blind["'] : ["']public["']/,
+    "directly resolved checks keep Discovery blind and all other checks public");
+  const executeStarship = between("async function executeStarshipCheck", "async function executeCheck");
+  assert.match(executeStarship, /messageMode:\s*["']public["']/,
+    "directly resolved starship checks remain public");
+});
+
 test("tracker changes native template and title when switching subsystem on the same instance", () => {
   const app = new Tracker();
   for (const type of ["influence", "starship", "research", "chase", "skill", "starship", "influence"]) {

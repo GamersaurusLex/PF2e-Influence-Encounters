@@ -18,6 +18,7 @@ const deepClone = (value) => foundry.utils.deepClone(value);
 const randomID = () => foundry.utils.randomID();
 const esc = (value = "") => foundry.utils.escapeHTML(String(value));
 const signed = (n) => `${n >= 0 ? "+" : ""}${n}`;
+const PLAYER_ROLL_STATES = new Set(["awaiting-player-roll", "awaiting-final-result"]);
 
 const PF2E_SKILLS = [
   "Acrobatics", "Arcana", "Athletics", "Crafting", "Deception", "Diplomacy", "Intimidation",
@@ -212,6 +213,16 @@ function starshipActivityChoices(actor, activity) {
   return allowed;
 }
 
+function starshipProposalChoices(actor, activity) {
+  const listed = new Set(starshipActivityChoices(actor, activity).map((skill) => skill.slug));
+  return trainedSkillChoicesWithPerception(actor).filter((skill) => !listed.has(skill.slug));
+}
+
+function starshipSelectedSkill(actor, activity, selection = {}) {
+  const choices = selection.proposed ? starshipProposalChoices(actor, activity) : starshipActivityChoices(actor, activity);
+  return choices.find((choice) => choice.slug === selection.skillSlug) ?? null;
+}
+
 function starshipFixedAttackStatistic(actor, bonus) {
   if (!actor || !game.pf2e?.Check || !game.pf2e?.CheckModifier || !game.pf2e?.Modifier) return null;
   const modifier = new game.pf2e.Modifier({ slug: "starship-fixed-attack", label: "Ship Weapon Attack", modifier: Number(bonus) || 0, type: "untyped" });
@@ -307,6 +318,40 @@ async function announceStarshipOutcome(encounter, priorOutcome = "") {
   });
 }
 
+function pendingCheckDisplay(request, position, details = {}) {
+  const status = request.status ?? "requested";
+  return {
+    ...request,
+    ...details,
+    position: position + 1,
+    canAdjudicate: status === "requested",
+    canReopen: status === "awaiting-final-result",
+    statusLabel: status === "awaiting-player-roll"
+      ? "Awaiting player roll"
+      : status === "awaiting-final-result"
+        ? "Player rolled — awaiting final result"
+        : ""
+  };
+}
+
+function playerRollChecks(encounter) {
+  return (encounter?.pendingChecks ?? [])
+    .filter((request) => request.requesterId === game.user.id && PLAYER_ROLL_STATES.has(request.status))
+    .map((request) => ({
+      id: request.id,
+      actorName: participantDisplayName(encounter, game.actors.get(request.actorId)),
+      npcName: request.type === "starship"
+        ? (starshipShip(encounter.starship, "hostile")?.name ?? "Hostile ship")
+        : targetDisplayName(encounter.npcs.find((npc) => npc.id === request.npcId)),
+      skillLabel: request.approval?.skill?.label ?? request.skillLabel ?? "Selected check",
+      activityLabel: request.type === "starship"
+        ? (starshipActivityFor(encounter, request.roleId, request.activityId)?.label ?? "Crew action")
+        : "",
+      canRoll: request.status === "awaiting-player-roll",
+      canSubmit: request.status === "awaiting-final-result"
+    }));
+}
+
 function starshipTrackerContext(encounter) {
   const participants = encounterParticipants(encounter);
   const selection = encounterViewSelection(encounter);
@@ -342,11 +387,13 @@ function starshipTrackerContext(encounter) {
     : {};
   const selectedActionId = localAction.activityId || sharedAction.activityId || "";
   const selectedSkillSlug = localAction.activityId ? localAction.skillSlug : sharedAction.skillSlug ?? "";
+  const selectedSkillIsProposed = localAction.activityId ? !!localAction.starshipProposed : !!sharedAction.proposed;
   const activities = (selectedRole?.activities ?? []).map((activity) => ({
     ...activity,
     selected: activity.id === selectedActionId,
     difficulty: activity.difficulty ?? starshipDifficulty(activity.dc, encounter.level),
-    choices: starshipActivityChoices(selectedActor, activity).map((skill) => ({ ...skill, selected: skill.slug === selectedSkillSlug }))
+    choices: starshipActivityChoices(selectedActor, activity).map((skill) => ({ ...skill, selected: !selectedSkillIsProposed && skill.slug === selectedSkillSlug })),
+    proposalChoices: starshipProposalChoices(selectedActor, activity).map((skill) => ({ ...skill, selected: selectedSkillIsProposed && skill.slug === selectedSkillSlug }))
   }));
   const roleSelectionComplete = participants.length > 0 && participants.every((actor) =>
     starship.roles.some((role) => starship.roleSelections[actor.id] === role.id)
@@ -364,7 +411,12 @@ function starshipTrackerContext(encounter) {
   const pendingChecks = game.user.isGM ? (encounter.pendingChecks ?? []).map((request, index) => {
     const actor = game.actors.get(request.actorId);
     const activity = starshipActivityFor(encounter, request.roleId, request.activityId);
-    return { ...request, position: index + 1, actorName: actor ? participantDisplayName(encounter, actor) : "Missing PC", npcName: hostileShip?.name ?? "Hostile ship", skillLabel: request.skillLabel ?? "Unknown statistic", activityLabel: activity?.label ?? "Starship action" };
+    return pendingCheckDisplay(request, index, {
+      actorName: actor ? participantDisplayName(encounter, actor) : "Missing PC",
+      npcName: hostileShip?.name ?? "Hostile ship",
+      skillLabel: request.approval?.skill?.label ?? request.skillLabel ?? "Unknown statistic",
+      activityLabel: activity?.label ?? "Starship action"
+    });
   }) : [];
   return {
     encounter, starship: { ...starship, countdown: clock, outcome: starshipOutcome }, starshipOutcome, starshipVictory: starshipOutcome === "victory", isStarship: true, isGM: game.user.isGM, noEncounter: false, isPaused: encounter.status === "paused",
@@ -372,7 +424,7 @@ function starshipTrackerContext(encounter) {
     heart: starshipShipContext(hostileShip),
     actors: participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter.actorsActed?.[actor.id], roleLabel: starshipRole(encounter, starship.roleSelections[actor.id])?.label ?? "Unassigned" })),
     checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry, typeLabel: entry.type === "starship" ? "Crew Action" : entry.type, displayOutcome: entry.outcome })),
-    controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, tableSpotlight, finished, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
+    controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, playerRollChecks: playerRollChecks(encounter), tableSpotlight, finished, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
     canClaimRole: encounter.status === "active" && starship.stage === "role-selection" && !!selectedActor,
     canStartStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "role-selection" && !finished,
     canTakeStarshipAction: encounter.status === "active" && starship.stage === "actions" && !!selectedActor && !!selectedRole && !!selectedActionId && !!selectedSkillSlug && !encounter.actorsActed?.[selectedActor.id] && !finished,
@@ -721,6 +773,11 @@ function normalizeEncounterCollections(encounter) {
   encounter.checkLog = indexedArray(encounter.checkLog);
   encounter.pendingDiscoveries = indexedArray(encounter.pendingDiscoveries);
   encounter.pendingChecks = indexedArray(encounter.pendingChecks);
+  encounter.pendingChecks.forEach((request) => {
+    request.status = ["requested", ...PLAYER_ROLL_STATES].includes(request.status) ? request.status : "requested";
+    request.approval ??= null;
+    request.playerRoll ??= null;
+  });
   encounter.npcs = indexedArray(encounter.npcs);
   // Preserve the legacy single-NPC fallback, but let new multi-NPC drafts begin
   // empty so their first target must be deliberately added or dropped.
@@ -1928,7 +1985,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       "manage", "edit", "claim-starship-role", "unclaim-starship-role", "select-starship-action",
       "take-starship-action", "start-starship-round", "next-starship-round", "starship-adjust",
       "declare-starship-outcome", "select-participant", "select-npc", "request", "adjudicate-request",
-      "cancel-request", "open-for-players", "pause", "resume", "victory-splash", "reveal-influence-rewards",
+      "cancel-request", "resolve-request-manually", "reopen-player-roll", "forget-request", "roll-approved-check", "submit-approved-check", "open-for-players", "pause", "resume", "victory-splash", "reveal-influence-rewards",
       "undo", "next-round", "prior", "advance", "pass-obstacle", "adjust", "change-ip", "apply-reward",
       "reset-actions", "declare-skill-outcome", "declare-chase-outcome",
       "end-encounter", "remove-effect", "resolve-pending-discovery"
@@ -2024,9 +2081,13 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
         const queuedNpc = encounter.npcs.find((npc) => npc.id === request.npcId);
         const skillList = request.type === "discovery" ? queuedNpc?.discovery : queuedNpc?.influence;
         const queuedSkill = skillList?.find((skill) => skill.id === request.skillId || skill.slug === request.skillSlug);
-        return { ...request, position: index + 1, actorName: queuedActor ? participantDisplayName(encounter, queuedActor) : "Missing PC",
-          npcName: queuedNpc ? targetDisplayName(queuedNpc) : "Missing target", skillLabel: queuedSkill?.label ?? request.skillLabel ?? "Missing skill" };
+        return pendingCheckDisplay(request, index, {
+          actorName: queuedActor ? participantDisplayName(encounter, queuedActor) : "Missing PC",
+          npcName: queuedNpc ? targetDisplayName(queuedNpc) : "Missing target",
+          skillLabel: request.approval?.skill?.label ?? queuedSkill?.label ?? request.skillLabel ?? "Missing skill"
+        });
       }) : [],
+      playerRollChecks: playerRollChecks(encounter),
       isGM: game.user.isGM, showPoints: game.user.isGM || encounter?.publicPoints, noEncounter: !encounter, isPaused: encounter?.status === "paused",
       canOpenForPlayers: game.user.isGM && encounter?.status === "active",
       canAct: !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !encounter.skillOutcome && !!selection.actorId && sourceAvailable,
@@ -2047,6 +2108,11 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       if (encounter?.subsystemType !== "starship") return;
       setStarshipActionSelection(encounter, encounterViewSelection(encounter).actorId, event.currentTarget.dataset.activityId, event.currentTarget.value);
     }));
+    this.element.querySelectorAll("[data-starship-proposal]").forEach((input) => input.addEventListener("change", (event) => {
+      const encounter = Store.get();
+      if (encounter?.subsystemType !== "starship" || !event.currentTarget.value) return;
+      setStarshipActionSelection(encounter, encounterViewSelection(encounter).actorId, event.currentTarget.dataset.activityId, event.currentTarget.value, { proposed: true });
+    }));
   }
   async _action(event, target = event.currentTarget) {
     const action = target.dataset.action;
@@ -2057,6 +2123,8 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       return new EncounterEditor(encounter).render({ force: true });
     }
     if (!encounter) return;
+    if (action === "roll-approved-check") return rollApprovedPlayerCheck(encounter.id, target.dataset.id);
+    if (action === "submit-approved-check") return submitApprovedPlayerCheck(encounter.id, target.dataset.id);
     if (encounter.subsystemType === "starship") {
       if (action === "claim-starship-role") {
         const actorId = encounterViewSelection(encounter).actorId;
@@ -2118,6 +2186,9 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       const request = encounter.pendingChecks.find((entry) => entry.id === target.dataset.id);
       return request ? adjudicate(request) : ui.notifications.warn("That queued check is no longer available.");
     }
+    if (action === "resolve-request-manually") return resolveCheckManually(encounter.id, target.dataset.id);
+    if (action === "reopen-player-roll") return reopenPlayerRoll(encounter.id, target.dataset.id);
+    if (action === "forget-request") return forgetPendingCheck(encounter.id, target.dataset.id);
     if (action === "cancel-request") return cancelPendingCheck(encounter.id, target.dataset.id, "The GM canceled this check request.");
     if (action === "open-for-players") return openEncounterForParticipants(encounter);
     if (action === "pause") return pauseEncounter(encounter.id);
@@ -3197,7 +3268,7 @@ async function deleteEncounter(id) {
   }
   await Store.remove(id);
   closeEncounterContextMenu();
-  tracker?.render({ force: false });
+  tracker?.render({ force: true });
   renderInfluenceSidebar();
   renderCinematicHud();
   if (game.user.isGM) game.socket.emit(SOCKET, { action: "refresh" });
@@ -3975,21 +4046,21 @@ async function assignStarshipRole(payload) {
   game.socket.emit(SOCKET, { action: "refresh" });
 }
 
-async function setStarshipActionSelection(encounter, actorId, activityId, skillSlug = "") {
+async function setStarshipActionSelection(encounter, actorId, activityId, skillSlug = "", { proposed = false } = {}) {
   const actor = game.actors.get(actorId);
   const roleId = encounter?.starship?.roleSelections?.[actorId];
   const activity = starshipActivityFor(encounter, roleId, activityId);
   if (!actor || !activity || encounter?.starship?.stage !== "actions") return;
   if (!game.user.isGM && !canUserControlActor(actor)) return;
   const selectedSkill = skillSlug || starshipActivityChoices(actor, activity)[0]?.slug || "";
-  const payload = { action: "starship-action-selection", encounterId: encounter.id, actorId, activityId, skillSlug: selectedSkill, userId: game.user.id };
+  const payload = { action: "starship-action-selection", encounterId: encounter.id, actorId, activityId, skillSlug: selectedSkill, proposed, userId: game.user.id };
   if (game.user.isGM) return saveStarshipActionSelection(payload);
   await setEncounterViewSelection(encounter, {
     starshipActionId: activity.id,
-    starshipSkillSlug: selectedSkill,
+    starshipSkillSlug: selectedSkill, starshipProposed: proposed,
     starshipRound: Number(encounter.currentRound)
   });
-  tracker?.render({ force: false });
+  tracker?.render({ force: true });
   game.socket.emit(SOCKET, payload);
 }
 
@@ -4001,9 +4072,9 @@ async function saveStarshipActionSelection(payload) {
   const activity = starshipActivityFor(encounter, roleId, payload.activityId);
   const user = game.users.get(payload.userId);
   if (!encounter || encounter.subsystemType !== "starship" || encounter.starship.stage !== "actions" || !actor || !activity || (!user?.isGM && !canUserControlActor(actor, user))) return;
-  const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === payload.skillSlug);
+  const skill = starshipSelectedSkill(actor, activity, payload);
   if (!skill) return;
-  encounter.starship.actionSelections[actor.id] = { activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label };
+  encounter.starship.actionSelections[actor.id] = { activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label, proposed: !!payload.proposed };
   await Store.save(encounter);
   tracker?.render({ force: true });
   game.socket.emit(SOCKET, { action: "refresh" });
@@ -4082,13 +4153,13 @@ async function requestStarshipCheck(encounter, actorId) {
   const localSelection = encounterViewSelection(encounter);
   const selection = encounter?.starship?.actionSelections?.[actorId]
     ?? (!game.user.isGM && localSelection.starshipRound === Number(encounter.currentRound)
-      ? { activityId: localSelection.starshipActionId, skillSlug: localSelection.starshipSkillSlug }
+      ? { activityId: localSelection.starshipActionId, skillSlug: localSelection.starshipSkillSlug, proposed: !!localSelection.starshipProposed }
       : null);
   const activity = starshipActivityFor(encounter, roleId, selection?.activityId);
-  const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === selection?.skillSlug);
+  const skill = starshipSelectedSkill(actor, activity, selection);
   if (!actor || !activity || !skill) return ui.notifications.warn("Choose a role, activity, and trained eligible statistic first.");
   if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this round.`);
-  const payload = { action: "check-request", encounterId: encounter.id, npcId: starshipShipKey(encounter.starship, "hostile"), requesterId: game.user.id, actorId: actor.id, type: "starship", roleId, activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label };
+  const payload = { action: "check-request", encounterId: encounter.id, npcId: starshipShipKey(encounter.starship, "hostile"), requesterId: game.user.id, actorId: actor.id, type: "starship", roleId, activityId: activity.id, skillSlug: skill.slug, skillLabel: skill.label, proposed: !!selection?.proposed };
   if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
 }
 
@@ -4119,21 +4190,22 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
     selectableSkills = knownSkills;
     const knownOptions = knownSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
     const attemptOptions = attempts.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
-    options = `${knownOptions}${knownOptions && attemptOptions ? '<option disabled>──────────</option>' : ""}${attemptOptions}`;
+    options = `${knownOptions}${knownOptions && attemptOptions ? '<option disabled>────────── Other trained skills ──────────</option>' : ""}${attemptOptions}`;
   } else {
     const knownSkills = type === "influence"
       ? knownConfiguredSkills(actor, npc.influence, npc, "known")
       : isChase
         ? knownConfiguredSkills(actor, npc.influence, npc, "known", { allowShipGunnery: true })
         : availableSkillsForActor(actor, npc.influence, npc);
-    const attempts = type === "influence" ? speculativeAttemptSkills(actor, npc, knownSkills) : [];
+    // A listed check is the obvious route, but a trained character should be
+    // able to pitch a sensible approach the GM did not configure in advance.
+    // The GM decides whether that proposal is valid during adjudication.
+    const attempts = speculativeAttemptSkills(actor, npc, knownSkills);
     selectableSkills = knownSkills;
     if (!knownSkills.length && !attempts.length) return ui.notifications.warn(`${actor.name} has no trained ${isResearch ? "Research" : isChase ? "Overcome" : isSkill ? "Skill Encounter" : "Influence"} checks.`);
     const knownOptions = knownSkills.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="configured:${skill.id}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
     const attemptOptions = attempts.map((skill) => { const mod = actorStatisticModifier(actor, skill); return `<option value="actor:${esc(skill.slug)}">${esc(skill.label)}${mod === null ? "" : ` (${signed(mod)})`}</option>`; }).join("");
-    options = type === "influence"
-      ? `${knownOptions}${knownOptions && attemptOptions ? '<option disabled>──────────</option>' : ""}${attemptOptions}`
-      : knownOptions;
+    options = `${knownOptions}${knownOptions && attemptOptions ? '<option disabled>──────────</option>' : ""}${attemptOptions}`;
   }
   new DialogV2({
     window: { title: `Make a Check: ${npcName}` },
@@ -4147,7 +4219,8 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
       const payload = { action: "check-request", encounterId: encounter.id, npcId: npc.id, requesterId: game.user.id, actorId: actor.id, type,
         skillId: source === "configured" ? configuredChoice?.sourceSkillId ?? value : null,
         skillSlug: actorChoice?.slug ?? (anyLore ? configuredChoice?.slug : null),
-        skillLabel: actorChoice?.label ?? (anyLore ? configuredChoice?.label : null), anyLore, diverseLore: !!configuredChoice?.diverseLore };
+        skillLabel: actorChoice?.label ?? (anyLore ? configuredChoice?.label : null), anyLore, diverseLore: !!configuredChoice?.diverseLore,
+        proposed: source === "actor" };
       if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
     } }]
   }).render({ force: true });
@@ -4212,7 +4285,209 @@ async function cancelPendingCheck(encounterId, requestId, reason) {
   await Store.save(encounter);
   game.socket.emit(SOCKET, { action: "refresh" });
   await notifyPendingCheck(request, reason);
-  tracker?.render({ force: false });
+  tracker?.render({ force: true });
+}
+
+async function forgetPendingCheck(encounterId, requestId) {
+  const encounter = Store.get(encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
+  if (!encounter || !request) return;
+  encounter.pendingChecks = encounter.pendingChecks.filter((entry) => entry.id !== requestId);
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "check-request-status", userId: request.requesterId, message: "The GM cleared this check request." });
+  game.socket.emit(SOCKET, { action: "refresh" });
+  tracker?.render({ force: true });
+}
+
+async function reopenPlayerRoll(encounterId, requestId) {
+  const encounter = Store.get(encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
+  if (!encounter || !request || request.status !== "awaiting-final-result") return ui.notifications.info("That request does not have a submitted player roll to reopen.");
+  request.status = "awaiting-player-roll";
+  request.playerRoll = null;
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "player-roll-approved", encounterId, requestId, userId: request.requesterId });
+  game.socket.emit(SOCKET, { action: "refresh" });
+  tracker?.render({ force: true });
+}
+
+async function chooseManualOutcome() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    DialogV2.wait({
+      window: { title: "Resolve Check Manually" },
+      content: `<div class="form-group"><label>Final outcome</label><select name="degree"><option value="0">Critical Failure</option><option value="1">Failure</option><option value="2" selected>Success</option><option value="3">Critical Success</option></select><p class="hint">This immediately applies the normal encounter result without rolling.</p></div>`,
+      buttons: [
+        { action: "resolve", default: true, icon: "fas fa-check", label: "Apply Result", callback: (_event, button) => finish(Number(button.form.elements.degree.value)) },
+        { action: "cancel", label: "Cancel", callback: () => finish(null) }
+      ],
+      close: () => finish(null)
+    });
+  });
+}
+
+async function resolveApprovedCheckManually(encounterId, requestId, requestedDegree = null) {
+  const encounter = Store.get(encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
+  if (!encounter || !request?.approval) return;
+  const hasRequestedDegree = requestedDegree !== null
+    && requestedDegree !== undefined
+    && [0, 1, 2, 3].includes(Number(requestedDegree));
+  const degree = hasRequestedDegree ? Number(requestedDegree) : await chooseManualOutcome();
+  if (![0, 1, 2, 3].includes(degree)) return;
+  const actor = game.actors.get(request.actorId);
+  if (!actor) return cancelPendingCheck(encounter.id, request.id, "The acting PC is no longer available.");
+  // Preserve the selected degree while marking this as a GM resolution. The
+  // public card reports the outcome without pretending a d20 was rolled.
+  const roll = { total: 0, degreeOfSuccess: degree, manual: true };
+  if (request.type === "starship") {
+    const { role, activity, skill, selected, dcAdjust } = request.approval;
+    return executeStarshipCheck(encounter, request, actor, role, activity, { ...skill, invalidStarship: false }, selected, Number(dcAdjust) || 0, roll);
+  }
+  const { skill, selected, dcAdjust } = request.approval;
+  return executeCheck(encounter, request, actor, { ...skill, invalidDiscovery: false, invalidInfluence: false }, selected, Number(dcAdjust) || 0, roll);
+}
+
+async function resolveCheckManually(encounterId, requestId) {
+  const encounter = Store.get(encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
+  if (!encounter || !request) return ui.notifications.warn("That queued check is no longer available.");
+  if (request.status === "requested") return adjudicate(request, { resolveManually: true });
+  return resolveApprovedCheckManually(encounterId, requestId);
+}
+
+async function approvePlayerCheck(encounter, request, actor, approval, { notifyPlayer = true } = {}) {
+  // The request dialog can outlive a tracker refresh. Re-read the encounter
+  // before changing its lifecycle state so an approval never writes an old
+  // `requested` copy back over the queued request.
+  const savedEncounter = Store.get(encounter.id);
+  const savedRequest = savedEncounter?.pendingChecks?.find((entry) => entry.id === request.id);
+  if (!savedEncounter || !savedRequest || savedRequest.status !== "requested") return;
+  const existingEffectIds = new Set((savedEncounter.activeEffects ?? []).map((effect) => effect.id));
+  savedEncounter.activeEffects ??= [];
+  savedEncounter.activeEffects.push(...(encounter.activeEffects ?? []).filter((effect) => !existingEffectIds.has(effect.id)));
+  savedRequest.status = "awaiting-player-roll";
+  savedRequest.approval = deepClone(approval);
+  savedRequest.playerRoll = null;
+  savedRequest.approvedAt = Date.now();
+  await Store.save(savedEncounter);
+  const payload = { action: "player-roll-approved", encounterId: savedEncounter.id, requestId: savedRequest.id, userId: savedRequest.requesterId };
+  if (notifyPlayer && savedRequest.requesterId === game.user.id) ui.notifications.info("Check approved. Roll it when ready.");
+  else game.socket.emit(SOCKET, payload);
+  game.socket.emit(SOCKET, { action: "refresh" });
+  tracker?.render({ force: true });
+}
+
+async function rollApprovedPlayerCheck(encounterId, requestId) {
+  return openApprovedPlayerRoll({ encounterId, requestId, userId: game.user.id });
+}
+
+function approvedCheckStatistic(actor, request) {
+  const approval = request.approval ?? {};
+  if (request.type === "starship") {
+    const activity = approval.activity;
+    return Number(activity?.attackBonus) > 0
+      ? starshipFixedAttackStatistic(actor, Number(activity.attackBonus))
+      : approval.skill?.slug === "simple-ranged"
+        ? starshipSimpleRangedStatistic(actor)
+        : skillStatistic(actor, approval.skill?.slug, approval.skill?.label);
+  }
+  const skill = approval.skill;
+  return request.type === "chase" && skill?.slug === "attack"
+    ? starshipSimpleRangedStatistic(actor)
+    : skillStatistic(actor, skill?.slug, skill?.label);
+}
+
+function approvedRollModifiers(request) {
+  return (request.approval?.selected ?? [])
+    .filter((modifier) => modifier.mode !== "dc")
+    .map((modifier) => new game.pf2e.Modifier({
+      slug: `influence-${String(modifier.id).slugify()}`,
+      label: modifier.label,
+      modifier: Number(modifier.value),
+      type: modifier.type || "untyped"
+    }));
+}
+
+async function openApprovedPlayerRoll(payload) {
+  if (payload.userId !== game.user.id) return;
+  const encounter = Store.get(payload.encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === payload.requestId);
+  if (!encounter || request?.status !== "awaiting-player-roll") return;
+  const actor = game.actors.get(request.actorId);
+  const statistic = approvedCheckStatistic(actor, request);
+  if (!actor || !statistic?.roll) return ui.notifications.error(`${actor?.name ?? "That PC"} no longer has a rollable ${request.approval?.skill?.label ?? "statistic"}.`);
+  const approval = request.approval;
+  const roll = await statistic.roll.call(statistic, {
+    dc: { value: Number(approval.effectiveDC), visible: false, label: `${encounter.name}: ${approval.skill.label}` },
+    modifiers: approvedRollModifiers(request),
+    extraRollOptions: [`influence:type:${request.type}`, `influence:encounter:${encounter.id}`, `influence:pending:${request.id}`],
+    label: request.type === "starship" ? `${approval.role?.label ?? "Crew"}: ${approval.activity?.label ?? approval.skill.label}` : `${request.type.titleCase()}: ${targetDisplayName(encounter.npcs.find((npc) => npc.id === request.npcId))}`,
+    // The roll belongs to the player so PF2e's native Hero Point reroll is
+    // available. Influence, Chase, Research, Skill, and Starship checks are
+    // public; Discovery remains GM blind. The module's sanitized result card
+    // still controls whether a DC or success margin is disclosed.
+    messageMode: request.type === "discovery" ? "blind" : "public",
+    skipDialog: true,
+    createMessage: true
+  });
+  if (!roll) return;
+  reportPlayerRoll({
+    encounterId: encounter.id,
+    requestId: request.id,
+    userId: game.user.id,
+    total: Number(roll.total),
+    degree: Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess)
+  });
+}
+
+function reportPlayerRoll(payload) {
+  if (game.user.isGM && game.users.activeGM?.id === game.user.id) return receivePlayerRoll(payload);
+  game.socket.emit(SOCKET, { action: "player-roll-recorded", ...payload });
+}
+
+async function receivePlayerRoll(payload) {
+  if (!game.user.isGM || game.users.activeGM?.id !== game.user.id) return;
+  const encounter = Store.get(payload.encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === payload.requestId);
+  const total = Number(payload.total);
+  const degree = Number(payload.degree);
+  if (!encounter || !request || request.requesterId !== payload.userId || !PLAYER_ROLL_STATES.has(request.status) || !Number.isFinite(total) || ![0, 1, 2, 3].includes(degree)) return;
+  request.status = "awaiting-final-result";
+  request.playerRoll = { total, degree, messageId: payload.messageId ?? request.playerRoll?.messageId ?? "", recordedAt: Date.now() };
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+  tracker?.render({ force: true });
+}
+
+async function submitApprovedPlayerCheck(encounterId, requestId) {
+  const encounter = Store.get(encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
+  if (!request || request.requesterId !== game.user.id || request.status !== "awaiting-final-result" || !request.playerRoll) return ui.notifications.warn("Roll this approved check before submitting it.");
+  const payload = { action: "player-roll-submit", encounterId, requestId, userId: game.user.id };
+  if (game.user.isGM && game.users.activeGM?.id === game.user.id) return resolveSubmittedPlayerRoll(payload);
+  game.socket.emit(SOCKET, payload);
+}
+
+async function resolveSubmittedPlayerRoll(payload) {
+  if (!game.user.isGM || game.users.activeGM?.id !== game.user.id) return;
+  const encounter = Store.get(payload.encounterId);
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === payload.requestId);
+  if (!encounter || !request || request.requesterId !== payload.userId || request.status !== "awaiting-final-result" || !request.playerRoll || !request.approval) return;
+  const actor = game.actors.get(request.actorId);
+  if (!actor) return cancelPendingCheck(encounter.id, request.id, "The acting PC is no longer available.");
+  const roll = { total: Number(request.playerRoll.total), degreeOfSuccess: Number(request.playerRoll.degree) };
+  if (request.type === "starship") {
+    const { role, activity, skill, selected, dcAdjust } = request.approval;
+    return executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, Number(dcAdjust) || 0, roll);
+  }
+  const { skill, selected, dcAdjust } = request.approval;
+  return executeCheck(encounter, request, actor, skill, selected, Number(dcAdjust) || 0, roll);
 }
 
 async function enqueueCheckRequest(payload) {
@@ -4225,7 +4500,7 @@ async function enqueueCheckRequest(payload) {
   if (starship) {
     const roleId = encounter.starship.roleSelections[actor.id];
     const activity = starshipActivityFor(encounter, roleId, payload.activityId);
-    const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === payload.skillSlug);
+    const skill = starshipSelectedSkill(actor, activity, payload);
     if (encounter.starship.stage !== "actions" || roleId !== payload.roleId || !activity || !skill || encounter.actorsActed?.[actor.id]) return ui.notifications.warn("That crew action is no longer available.");
   }
   if (encounter.skillOutcome || encounter.chaseOutcome) return ui.notifications.warn("That encounter has already concluded.");
@@ -4237,7 +4512,7 @@ async function enqueueCheckRequest(payload) {
   encounter.pendingChecks.push(request);
   await Store.save(encounter);
   const skillList = request.type === "discovery" ? npc?.discovery : npc?.influence;
-  const skill = starship ? starshipActivityChoices(actor, starshipActivityFor(encounter, request.roleId, request.activityId)).find((entry) => entry.slug === request.skillSlug) : skillList.find((entry) => entry.id === request.skillId || entry.slug === request.skillSlug);
+  const skill = starship ? starshipSelectedSkill(actor, starshipActivityFor(encounter, request.roleId, request.activityId), request) : skillList.find((entry) => entry.id === request.skillId || entry.slug === request.skillSlug);
   const actorName = participantDisplayName(encounter, actor);
   const npcName = starship ? (starshipShip(encounter.starship, "hostile")?.name ?? "Hostile ship") : targetDisplayName(npc);
   const requestLine = starship
@@ -4246,18 +4521,19 @@ async function enqueueCheckRequest(payload) {
   await ChatMessage.create({ content: `<div class="influence-chat influence-check-request"><strong>Check Requested</strong><p>${requestLine}</p></div>` });
   game.socket.emit(SOCKET, { action: "check-request-status", userId: request.requesterId, message: `${actorName}'s check request is queued for the GM.` });
   game.socket.emit(SOCKET, { action: "refresh" });
-  tracker?.render({ force: false });
+  tracker?.render({ force: true });
   if (!adjudicationOpen) adjudicate(request);
 }
 
-async function adjudicate(request) {
+async function adjudicate(request, { resolveManually = false } = {}) {
   if (!game.user.isGM) return;
   if (adjudicationOpen) return ui.notifications.info("Finish the current adjudication before opening another request.");
   const encounter = Store.get(request.encounterId);
   const actor = game.actors.get(request.actorId);
   if (!encounter || !encounter.pendingChecks.some((entry) => entry.id === request.id)) return ui.notifications.error("The requested check is no longer available.");
+  if ((request.status ?? "requested") !== "requested") return ui.notifications.info("That check is already awaiting the player's roll or final result.");
   if (!actor) return cancelPendingCheck(encounter.id, request.id, "The acting PC is no longer available.");
-  if (request.type === "starship" && encounter.subsystemType === "starship") return adjudicateStarship(request, encounter, actor);
+  if (request.type === "starship" && encounter.subsystemType === "starship") return adjudicateStarship(request, encounter, actor, { resolveManually });
   const npc = encounter.npcs.find((entry) => entry.id === request.npcId);
   if (!npc) return cancelPendingCheck(encounter.id, request.id, "The requested target is no longer available.");
   const actorName = participantDisplayName(encounter, actor);
@@ -4306,12 +4582,17 @@ async function adjudicate(request) {
   ].filter((modifier) => modifier.id.startsWith("boon:") || modifier.description || Number(modifier.value));
   const customMods = [];
   const rows = mods.map((m) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${m.id}" ${(m.enforced || (m.id.startsWith("boon:") && m.activation === "automatic")) ? "checked" : ""} ${m.enforced ? "disabled" : ""}> <strong>${esc(m.label)}</strong> ${signed(Number(m.value))} <small>${esc(m.description ?? "")}</small></label>`).join("");
+  const creativeRequest = !!request.proposed && (skill.invalidDiscovery || skill.invalidInfluence);
   const invalidNotice = skill.invalidDiscovery
     ? `<p class="hint"><strong>GM:</strong> This is not a valid Discovery skill for this encounter. The blind roll consumes the character's action but cannot grant a Discovery.</p>`
     : skill.invalidInfluence
       ? `<p class="hint"><strong>GM:</strong> This is not a configured Influence skill for this target. The roll consumes the character's action and resolves as a failure.</p>`
       : "";
-  const content = `<div class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div></div>`;
+  const creativeControls = creativeRequest
+    ? `<section class="creative-check-decision"><h4>Unlisted approach</h4><label><input type="checkbox" name="allowCreative"> Treat <strong>${esc(skill.label)}</strong> as valid for this check</label><label><input type="checkbox" name="saveCreative" disabled> Add it as a listed option for this target</label><p class="hint">Leaving this unchecked preserves the normal invalid-check result.</p></section>`
+    : "";
+  const manualOutcome = resolveManually ? `<div class="form-group"><label>Final outcome</label><select name="manualDegree"><option value="0">Critical Failure</option><option value="1">Failure</option><option value="2" selected>Success</option><option value="3">Critical Success</option></select></div>` : "";
+  const content = `<div class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> influences <strong>${esc(npcName)}</strong>: ${esc(skill.label)} vs. DC ${skill.dc}</p>${invalidNotice}${creativeControls}${rows}<hr><h4>Custom modifiers</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><label><input type="checkbox" name="saveCustom"> Keep for this target</label><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"><p class="hint">Positive raises the DC; negative lowers it.</p></div>${manualOutcome}</div>`;
   const adjudicationContent = request.type === "research" ? content.replace(" influences ", " researches ") : request.type === "chase" ? content.replace(" influences ", " attempts ") : request.type === "skill" ? content.replace(" influences ", " tackles ") : content;
   adjudicationOpen = true;
   DialogV2.wait({
@@ -4336,30 +4617,59 @@ async function adjudicate(request) {
         if (index >= 0) customMods.splice(index, 1);
         renderCustomMods();
       });
+      const allowCreative = html.querySelector('[name="allowCreative"]');
+      const saveCreative = html.querySelector('[name="saveCreative"]');
+      if (allowCreative && saveCreative) allowCreative.addEventListener("change", () => {
+        saveCreative.disabled = !allowCreative.checked;
+        if (!allowCreative.checked) saveCreative.checked = false;
+      });
     },
     buttons: [
-      { action: "roll", default: true, icon: "fas fa-dice-d20", label: "Confirm and Roll", callback: async (_event, button) => {
+      { action: "roll", default: true, icon: "fas fa-check", label: resolveManually ? "Apply Result" : "Approve Check", callback: async (_event, button, dialog) => {
         const html = button.form;
         const selectedIds = Array.from(html.querySelectorAll('[name="mod"]:checked'), (element) => element.value);
         const selected = mods.map((m) => ({ ...m, selected: m.enforced || selectedIds.includes(m.id) }));
         selected.push(...customMods.map((mod) => ({ ...mod, selected: true })));
         const boonDcAdjust = resolveTypedDcAdjustment(selected.filter((m) => m.selected && m.mode === "dc"));
         const dcAdjust = (Number(html.querySelector('[name="dcAdjust"]')?.value) || 0) + boonDcAdjust;
+        const allowCreative = !!html.querySelector('[name="allowCreative"]')?.checked;
+        const resolvedSkill = allowCreative ? { ...skill, invalidDiscovery: false, invalidInfluence: false } : skill;
+        if (allowCreative && html.querySelector('[name="saveCreative"]')?.checked) {
+          list.push({
+            id: randomID(), slug: resolvedSkill.slug, label: resolvedSkill.label, description: "",
+            dc: Number(resolvedSkill.dc) + dcAdjust, dcModified: true, lore: isLoreSkill(resolvedSkill),
+            secret: request.type === "discovery" ? false : undefined,
+            known: request.type === "influence" ? true : undefined
+          });
+          await Store.save(encounter);
+        }
         encounter.activeEffects.push(...customMods.filter((mod) => mod.persist).map((mod) => ({ id: randomID(), kind: "modifier", targetNpcId: npc.id, label: mod.label, value: mod.value, type: mod.type, mode: "roll", scope: "both", skills: [], uses: 999, remaining: 999 })));
-        await executeCheck(encounter, request, actor, skill, selected.filter((m) => m.selected), dcAdjust);
+        await approvePlayerCheck(encounter, request, actor, {
+          skill: resolvedSkill,
+          selected: selected.filter((m) => m.selected),
+          dcAdjust,
+          effectiveDC: Number(resolvedSkill.dc) + dcAdjust
+        }, { notifyPlayer: !resolveManually });
+        if (resolveManually) {
+          await resolveApprovedCheckManually(encounter.id, request.id, Number(html.querySelector('[name="manualDegree"]')?.value));
+          return dialog?.close?.();
+        }
       } },
       { action: "cancel", label: "Return to Queue" }
     ], close: () => { adjudicationOpen = false; }
   });
 }
 
-async function adjudicateStarship(request, encounter, actor) {
+async function adjudicateStarship(request, encounter, actor, { resolveManually = false } = {}) {
   if (encounter.starship.stage !== "actions" || encounter.actorsActed?.[actor.id]) return cancelPendingCheck(encounter.id, request.id, "That crew action is no longer available.");
   const role = starshipRole(encounter, request.roleId);
   const activity = starshipActivityFor(encounter, request.roleId, request.activityId);
-  const skill = starshipActivityChoices(actor, activity).find((choice) => choice.slug === request.skillSlug);
+  const skill = starshipSelectedSkill(actor, activity, request);
   if (!role || !activity || !skill) return cancelPendingCheck(encounter.id, request.id, "That crew action or statistic is no longer available.");
   const actorName = participantDisplayName(encounter, actor);
+  const creativeControls = request.proposed
+    ? `<section class="creative-check-decision"><h4>Unlisted approach</h4><label><input type="checkbox" name="allowCreative"> Treat <strong>${esc(skill.label)}</strong> as valid for this action</label><label><input type="checkbox" name="saveCreative" disabled> Add it as a listed statistic for ${esc(activity.label)}</label><p class="hint">Leaving this unchecked resolves the proposed approach as a failure.</p></section>`
+    : "";
   const mods = [
     ...(encounter.starship.modifiers ?? []),
     ...(encounter.activeEffects ?? []).filter((effect) => !effect.targetNpcId && effect.mode !== "narrative")
@@ -4369,7 +4679,7 @@ async function adjudicateStarship(request, encounter, actor) {
   adjudicationOpen = true;
   DialogV2.wait({
     window: { title: `Adjudicate ${role.label}: ${activity.label}` }, position: { width: 560 },
-    content: `<div class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> uses <strong>${esc(skill.label)}</strong> for <strong>${esc(activity.label)}</strong> against DC ${activity.dc}.</p>${rows}<hr><h4>Additional modifier</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"></div></div>`,
+    content: `<div class="influence-adjudicate"><p><strong>${esc(actorName)}</strong> uses <strong>${esc(skill.label)}</strong> for <strong>${esc(activity.label)}</strong> against DC ${activity.dc}.</p>${creativeControls}${rows}<hr><h4>Additional modifier</h4><div class="form-group"><input name="customLabel" placeholder="Narrative circumstance"><input type="number" name="customValue" value="0"></div><div class="form-group"><label>Type</label><select name="customType"><option>circumstance</option><option>status</option><option>item</option><option>untyped</option></select><button type="button" data-action="add-custom"><i class="fas fa-plus"></i> Add Modifier</button></div><div class="custom-modifiers"></div><div class="form-group"><label>DC adjustment</label><input type="number" name="dcAdjust" value="0"></div>${resolveManually ? `<div class="form-group"><label>Final outcome</label><select name="manualDegree"><option value="0">Critical Failure</option><option value="1">Failure</option><option value="2" selected>Success</option><option value="3">Critical Success</option></select></div>` : ""}</div>`,
     render: (_event, app) => {
       const html = app.element;
       const renderCustomMods = () => html.querySelector(".custom-modifiers").innerHTML = customMods.map((mod) => `<div class="custom-modifier"><span><strong>${esc(mod.label)}</strong> ${signed(mod.value)} (${esc(mod.type)})</span><button type="button" data-remove-custom="${mod.id}"><i class="fas fa-times"></i></button></div>`).join("");
@@ -4388,44 +4698,71 @@ async function adjudicateStarship(request, encounter, actor) {
         if (index >= 0) customMods.splice(index, 1);
         renderCustomMods();
       });
+      const allowCreative = html.querySelector('[name="allowCreative"]');
+      const saveCreative = html.querySelector('[name="saveCreative"]');
+      if (allowCreative && saveCreative) allowCreative.addEventListener("change", () => {
+        saveCreative.disabled = !allowCreative.checked;
+        if (!allowCreative.checked) saveCreative.checked = false;
+      });
     },
     buttons: [
-      { action: "roll", default: true, icon: "fas fa-dice-d20", label: "Confirm and Roll", callback: async (_event, button) => {
+      { action: "roll", default: true, icon: "fas fa-check", label: resolveManually ? "Apply Result" : "Approve Check", callback: async (_event, button, dialog) => {
         const html = button.form;
         const selectedIds = Array.from(html.querySelectorAll('[name="mod"]:checked'), (element) => element.value);
         const selected = [...mods.filter((modifier) => selectedIds.includes(modifier.id)), ...customMods];
-        await executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, Number(html.querySelector('[name="dcAdjust"]')?.value) || 0);
+        const dcAdjust = Number(html.querySelector('[name="dcAdjust"]')?.value) || 0;
+        const allowCreative = !!html.querySelector('[name="allowCreative"]')?.checked;
+        const resolvedSkill = allowCreative ? { ...skill, invalidStarship: false } : { ...skill, invalidStarship: !!request.proposed };
+        if (allowCreative && html.querySelector('[name="saveCreative"]')?.checked && !activity.skills.includes(skill.slug)) {
+          activity.skills.push(skill.slug);
+          await Store.save(encounter);
+        }
+        await approvePlayerCheck(encounter, request, actor, {
+          role,
+          activity,
+          skill: resolvedSkill,
+          selected,
+          dcAdjust,
+          effectiveDC: Number(activity.dc) + dcAdjust
+        }, { notifyPlayer: !resolveManually });
+        if (resolveManually) {
+          await resolveApprovedCheckManually(encounter.id, request.id, Number(html.querySelector('[name="manualDegree"]')?.value));
+          return dialog?.close?.();
+        }
       } },
       { action: "cancel", label: "Return to Queue" }
     ], close: () => { adjudicationOpen = false; }
   });
 }
 
-async function executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, dcAdjust) {
-  const statistic = Number(activity.attackBonus) > 0
-    ? starshipFixedAttackStatistic(actor, Number(activity.attackBonus))
-    : skill.slug === "simple-ranged"
-      ? starshipSimpleRangedStatistic(actor)
-    : skillStatistic(actor, skill.slug, skill.label);
-  if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
-  const rollModifiers = selected.map((modifier) => new game.pf2e.Modifier({ slug: `starship-${String(modifier.id).slugify()}`, label: modifier.label, modifier: Number(modifier.value), type: modifier.type || "untyped" }));
+async function executeStarshipCheck(encounter, request, actor, role, activity, skill, selected, dcAdjust, resolvedRoll = null) {
   const effectiveDC = Number(activity.dc) + dcAdjust;
-  const roll = await statistic.roll.call(statistic, {
-    dc: { value: effectiveDC, visible: false, label: `${encounter.name} — ${activity.label}` },
-    modifiers: rollModifiers,
-    extraRollOptions: [`influence:starship:${activity.id}`, `influence:encounter:${encounter.id}`],
-    label: `${role.label}: ${activity.label}`,
-    messageMode: "public",
-    createMessage: true
-  });
+  let roll = resolvedRoll;
+  if (!roll) {
+    const statistic = Number(activity.attackBonus) > 0
+      ? starshipFixedAttackStatistic(actor, Number(activity.attackBonus))
+      : skill.slug === "simple-ranged"
+        ? starshipSimpleRangedStatistic(actor)
+        : skillStatistic(actor, skill.slug, skill.label);
+    if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
+    const rollModifiers = selected.map((modifier) => new game.pf2e.Modifier({ slug: `starship-${String(modifier.id).slugify()}`, label: modifier.label, modifier: Number(modifier.value), type: modifier.type || "untyped" }));
+    roll = await statistic.roll.call(statistic, {
+      dc: { value: effectiveDC, visible: false, label: `${encounter.name} — ${activity.label}` },
+      modifiers: rollModifiers,
+      extraRollOptions: [`influence:starship:${activity.id}`, `influence:encounter:${encounter.id}`],
+      label: `${role.label}: ${activity.label}`,
+      messageMode: "public",
+      createMessage: true
+    });
+  }
   if (!roll) return;
-  const degree = Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
+  const degree = skill.invalidStarship ? 1 : Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
   const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
   const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
   const actorName = participantDisplayName(encounter, actor);
   snapshot(encounter, `${actorName}: ${activity.label}`);
   const hostileShip = starshipShip(encounter.starship, "hostile");
-  const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: starshipShipKey(encounter.starship, "hostile"), npcName: hostileShip?.name ?? "Hostile ship", type: "starship", skillLabel: skill.label, outcome, phase: encounter.currentRound, timestamp: Date.now(), detailLabel: role.label, details: [activity.label] };
+  const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: starshipShipKey(encounter.starship, "hostile"), npcName: hostileShip?.name ?? "Hostile ship", type: "starship", skillLabel: skill.label, outcome: skill.invalidStarship ? `${outcome} — Invalid Crew Statistic` : outcome, phase: encounter.currentRound, timestamp: Date.now(), detailLabel: role.label, details: [activity.label] };
   encounter.checkLog.push(logEntry);
   encounter.actorsActed[actor.id] = true;
   encounter.pendingChecks = encounter.pendingChecks.filter((entry) => entry.id !== request.id);
@@ -4453,11 +4790,12 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   await Store.save(encounter);
   await announceStarshipOutcome(encounter, priorStarshipOutcome);
   game.socket.emit(SOCKET, { action: "refresh" });
-  await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(role.label)}</strong><p>${esc(actorName)} used ${esc(skill.label)} for ${esc(activity.label)}: <strong>${outcome}</strong>.</p>${damageReport}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+  const outcomeLabel = roll.manual ? `GM Adjudicated ${outcome}` : outcome;
+  await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(role.label)}</strong><p>${esc(actorName)} used ${esc(skill.label)} for ${esc(activity.label)}: <strong>${outcomeLabel}</strong>.</p>${damageReport}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
   tracker?.render({ force: false });
 }
 
-async function executeCheck(encounter, request, actor, skill, selected, dcAdjust) {
+async function executeCheck(encounter, request, actor, skill, selected, dcAdjust, resolvedRoll = null) {
   const adjudicationEffects = encounter.activeEffects ?? [];
   const currentEncounter = Store.get(encounter.id);
   if (currentEncounter) {
@@ -4481,28 +4819,29 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   }
   const actorName = participantDisplayName(encounter, actor);
   const npcName = targetDisplayName(npc);
-  const statistic = request.type === "chase" && skill.slug === "attack"
-    ? starshipSimpleRangedStatistic(actor)
-    : skillStatistic(actor, skill.slug, skill.label);
-  if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
   const effectiveDC = Number(skill.dc) + dcAdjust;
-  const rollModifiers = selected.filter((mod) => mod.mode !== "dc").map((mod) => new game.pf2e.Modifier({
-    slug: `influence-${String(mod.id).slugify()}`,
-    label: mod.label,
-    modifier: Number(mod.value),
-    type: mod.type || "untyped"
-  }));
   const breakdown = selected.map((m) => `${esc(m.label)} ${signed(Number(m.value))}`).join(", ");
-  const roll = await statistic.roll({
-    // PF2e's public roll card may show the degree of success, but subsystem
-    // DCs and success margins remain GM information.
-    dc: { value: effectiveDC, visible: false, label: `${encounter.name} — ${npcName}: ${skill.label}` },
-    modifiers: rollModifiers,
-    extraRollOptions: [`influence:type:${request.type}`, `influence:encounter:${encounter.id}`],
-    label: `${request.type.titleCase()}: ${npcName}`,
-    messageMode: request.type === "discovery" ? "blind" : "public",
-    createMessage: true
-  });
+  let roll = resolvedRoll;
+  if (!roll) {
+    const statistic = request.type === "chase" && skill.slug === "attack"
+      ? starshipSimpleRangedStatistic(actor)
+      : skillStatistic(actor, skill.slug, skill.label);
+    if (!statistic?.roll) return ui.notifications.error(`${actor.name} has no rollable ${skill.label} statistic.`);
+    const rollModifiers = selected.filter((mod) => mod.mode !== "dc").map((mod) => new game.pf2e.Modifier({
+      slug: `influence-${String(mod.id).slugify()}`,
+      label: mod.label,
+      modifier: Number(mod.value),
+      type: mod.type || "untyped"
+    }));
+    roll = await statistic.roll({
+      dc: { value: effectiveDC, visible: false, label: `${encounter.name} — ${npcName}: ${skill.label}` },
+      modifiers: rollModifiers,
+      extraRollOptions: [`influence:type:${request.type}`, `influence:encounter:${encounter.id}`],
+      label: `${request.type.titleCase()}: ${npcName}`,
+      messageMode: request.type === "discovery" ? "blind" : "public",
+      createMessage: true
+    });
+  }
   if (!roll) return;
   const degree = skill.invalidInfluence ? 1 : Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
   const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
@@ -4619,9 +4958,18 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
         : request.type === "skill"
         ? `${signed((individualSkillScoring ? skillActorPoints(encounter, actor.id) : encounter.skillPoints) - previousPoints)} Skill Point${Math.abs((individualSkillScoring ? skillActorPoints(encounter, actor.id) : encounter.skillPoints) - previousPoints) === 1 ? "" : "s"}`
         : `${signed(points)} Influence Point${Math.abs(points) === 1 ? "" : "s"}`;
-  if (request.type !== "discovery") {
+  // Discovery successes need the same public outcome confirmation as any
+  // other check. The subsequent discovery cards explain *what* was learned;
+  // this card tells the table whether the check succeeded without exposing a
+  // DC, total, or margin.
+  if (request.type !== "discovery" || (!skill.invalidDiscovery && degree >= 2)) {
+    const resultTitle = request.type === "discovery" ? `Discovery: ${esc(npcName)}` : `${esc(encounter.name)} — ${esc(npcName)}`;
+    const actionLine = request.type === "discovery"
+      ? `${esc(actorName)} used ${esc(skill.label)}.`
+      : `${esc(actorName)} used ${esc(skill.label)}.${breakdown ? ` Modifiers: ${breakdown}.` : ""}`;
+    const outcomeLabel = roll.manual ? `GM Adjudicated ${outcome}` : outcome;
     await ChatMessage.create({
-      content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(npcName)}</strong><p>${esc(actorName)} used ${esc(skill.label)}.${breakdown ? ` Modifiers: ${breakdown}.` : ""}</p><p><strong>${outcome} — ${resultText}</strong></p></div>`,
+      content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${resultTitle}</strong><p>${actionLine}</p><p><strong>${outcomeLabel} — ${resultText}</strong></p></div>`,
       style: CONST.CHAT_MESSAGE_STYLES.OOC,
       flags: { [MODULE_ID]: { messageKind: "result" } }
     });
@@ -4783,7 +5131,7 @@ function renderTracker(force = true) {
 
 function refreshTrackerForEncounterState() {
   const encounter = Store.get();
-  if (encounter?.status === "active") return tracker?.render({ force: false });
+  if (encounter?.status === "active") return tracker?.render({ force: true });
   return tracker?.close();
 }
 Hooks.once("init", () => {
@@ -4845,6 +5193,12 @@ Hooks.once("ready", async () => {
   tracker = new InfluenceTracker();
   game.socket.on(SOCKET, (payload) => {
     if (payload.action === "check-request" && game.user.isGM && game.users.activeGM?.id === game.user.id) receiveCheckRequest(payload);
+    if (payload.action === "player-roll-approved" && payload.userId === game.user.id) {
+      ui.notifications.info("Your check was approved. Roll it when ready.");
+      refreshTrackerForEncounterState();
+    }
+    if (payload.action === "player-roll-recorded" && game.user.isGM && game.users.activeGM?.id === game.user.id) receivePlayerRoll(payload);
+    if (payload.action === "player-roll-submit" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveSubmittedPlayerRoll(payload);
     if (payload.action === "starship-role" && game.user.isGM && game.users.activeGM?.id === game.user.id) assignStarshipRole(payload);
     if (payload.action === "starship-action-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) saveStarshipActionSelection(payload);
     if (payload.action === "check-request-status" && payload.userId === game.user.id) ui.notifications.info(payload.message);
@@ -4877,6 +5231,65 @@ function markInfluenceChatMessage(message, html) {
   html.classList.add(`influence-${kind}-message`);
 }
 Hooks.on("renderChatMessageHTML", markInfluenceChatMessage);
+
+// PF2e replaces a ChatMessage when a player spends a Hero Point. Keep the
+// module's pending-check link on the replacement through public document hooks
+// instead of replacing or monkey-patching the system's reroll workflow.
+const pendingRerollRequests = new Map();
+
+function rollMessageOptions(message) {
+  const options = message?.flags?.pf2e?.context?.options ?? message?.getFlag?.("pf2e", "context")?.options ?? [];
+  return Array.isArray(options) ? options : options instanceof Set ? [...options] : Object.values(options ?? {});
+}
+
+function pendingCheckIdFromMessage(message) {
+  return message?.getFlag?.(MODULE_ID, "pendingCheckId")
+    ?? rollMessageOptions(message).find((option) => String(option).startsWith("influence:pending:"))?.split(":").at(-1)
+    ?? "";
+}
+
+async function trackPlayerRollMessage(message, requestId) {
+  if (!requestId || message.user?.id !== game.user.id) return;
+  if (message.getFlag(MODULE_ID, "pendingCheckId") !== requestId) await message.setFlag(MODULE_ID, "pendingCheckId", requestId);
+  // PF2e keeps a Hero Point reroll on the original card and appends the
+  // replacement roll. The final roll is always the last roll on that card.
+  const roll = message.rolls?.at(-1);
+  const total = Number(roll?.total);
+  const degree = Number(roll?.degreeOfSuccess ?? roll?.options?.degreeOfSuccess);
+  if (!Number.isFinite(total) || ![0, 1, 2, 3].includes(degree)) return;
+  // A Hero Point replacement can be created while the active tracker is
+  // re-rendering. Resolve by the pending request itself rather than relying
+  // on the active-encounter setting being available at this exact moment.
+  const encounter = Object.values(Store.all()).find((entry) =>
+    entry?.pendingChecks?.some((pending) => pending.id === requestId)
+  ) ?? null;
+  const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
+  if (!request || request.requesterId !== game.user.id) return;
+  reportPlayerRoll({ encounterId: encounter.id, requestId, userId: game.user.id, total, degree, messageId: message.id });
+}
+
+Hooks.on("preDeleteChatMessage", (message) => {
+  if (message.user?.id !== game.user.id) return;
+  const requestId = pendingCheckIdFromMessage(message);
+  if (requestId) pendingRerollRequests.set(message.actor?.id ?? message.speaker?.actor, requestId);
+});
+
+Hooks.on("createChatMessage", (message) => {
+  if (message.user?.id !== game.user.id) return;
+  const actorId = message.actor?.id ?? message.speaker?.actor;
+  const requestId = pendingCheckIdFromMessage(message)
+    || (rollMessageOptions(message).includes("check:reroll") ? pendingRerollRequests.get(actorId) : "");
+  if (!requestId) return;
+  pendingRerollRequests.delete(actorId);
+  trackPlayerRollMessage(message, requestId);
+});
+
+Hooks.on("updateChatMessage", (message) => {
+  if (message.user?.id !== game.user.id) return;
+  const requestId = pendingCheckIdFromMessage(message);
+  if (requestId) trackPlayerRollMessage(message, requestId);
+});
+
 Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); });
 
 // A socket notification can arrive before Foundry has synchronized a changed
