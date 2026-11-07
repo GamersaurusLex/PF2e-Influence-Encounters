@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.19 — 2026-11-07
+
+- Added **Infiltration Encounters** for PF2e, with GM-configured objectives, Awareness Points, party and personal Edge Points, group or individual obstacle progress, and optional Global Progress Clock support for Awareness.
+- Added manual, critical-failure, and Awareness-triggered complications. A complication can be a narrative GM prompt or a blocking obstacle assigned to the triggering PC or a PC chosen by the party.
+- Edge Points can upgrade a failed or critical-failed Infiltration check to a success, remove its Awareness, and resolve a completed complication.
+- Added an opt-in campaign-clock integration that advances Foundry world time by a configurable duration after each Infiltration round; it defaults to 10 minutes.
+
 ## 0.8.18 — 2026-11-06
 
 - Added a GM-configured **Manual Mode** for Influence encounters. Player panels remain an information dashboard for targets, discoveries, participant selection, earned outcomes, and confirmed effective approaches while table rolls stay at the table and the GM records Influence Points manually.
