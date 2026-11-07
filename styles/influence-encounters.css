@@ -48,6 +48,10 @@
 .npc-status-card.subject-here small:first-of-type { color: var(--color-warm-1, #f3c47b); font-weight: 700; }
 .npc-profile { margin: .75rem 0; padding: .65rem .8rem; border: 1px solid var(--color-border-light-2); border-radius: 6px; }
 .npc-profile h3, .npc-profile p { margin: .25rem 0; }
+.manual-mode-guidance { margin: .75rem 0; padding: .65rem .8rem; border-left: 3px solid var(--color-warm-1, #d69b52); background: color-mix(in srgb, var(--color-bg-option) 78%, transparent); }
+.manual-mode-guidance h3, .manual-mode-guidance p, .manual-mode-guidance ul { margin: .2rem 0; }
+.manual-mode-guidance ul { padding-left: 1.25rem; }
+.influence-manual-mode-note { margin: .65rem 0 .25rem; }
 .player-actions, .influence-tracker footer, .toolbar, .row-actions { display: flex; gap: .5rem; margin-top: 1rem; }
 .results article { border-left: 3px solid #678; padding-left: .75rem; margin-top: 1rem; }
 .encounter-row { display: grid; grid-template-columns: 72px 1fr auto; gap: 1rem; align-items: center; padding: .7rem 0; border-bottom: 1px solid var(--color-border-light-2); }

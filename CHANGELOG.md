@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.18 — 2026-11-06
+
+- Added a GM-configured **Manual Mode** for Influence encounters. Player panels remain an information dashboard for targets, discoveries, participant selection, earned outcomes, and confirmed effective approaches while table rolls stay at the table and the GM records Influence Points manually.
+- Manual Mode blocks stale player check requests, preserves all GM tracking controls, and leaves Research, Chase, Skill, and Starship encounter automation unchanged.
+
 ## 0.8.17 — 2026-10-28
 
 - Added a persistent player-facing **Your Action** dock at the top of every encounter tracker. Approved checks now expose their **Roll** or **Submit Final Result** control above the encounter detail and remain visible while the player scrolls.
