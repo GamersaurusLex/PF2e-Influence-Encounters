@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.21 — 2026-11-08
+
+- Fixed saving, deleting, or otherwise persisting an encounter reopening the active or paused encounter tracker. Directory data now refreshes without treating Journal and setting updates as a request to open the tracker.
+
 ## 0.8.20 — 2026-11-08
 
 - Expanded **Manual Mode** into a GM-configurable policy for every encounter type: Influence, Research, Chase, Skill, Infiltration, and Starship.

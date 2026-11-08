@@ -3501,7 +3501,7 @@ async function deleteEncounter(id) {
   }
   await Store.remove(id);
   closeEncounterContextMenu();
-  tracker?.render({ force: true });
+  refreshTrackerForEncounterState({ reopen: false });
   renderInfluenceSidebar();
   renderCinematicHud();
   if (game.user.isGM) game.socket.emit(SOCKET, { action: "refresh" });
@@ -5609,9 +5609,9 @@ function renderTracker(force = true) {
   return tracker.render({ force });
 }
 
-function refreshTrackerForEncounterState() {
+function refreshTrackerForEncounterState({ reopen = true } = {}) {
   const encounter = Store.get();
-  if (encounter?.status === "active") return tracker?.render({ force: true });
+  if (encounter?.status === "active" && (reopen || tracker?.rendered)) return tracker?.render({ force: true });
   return tracker?.close();
 }
 Hooks.once("init", () => {
@@ -5724,7 +5724,7 @@ Hooks.once("ready", async () => {
       if (encounter?.chaseOutcome === "victory") showVictorySplash(encounter);
     }
     if (payload.action === "refresh" && (!payload.userId || payload.userId === game.user.id)) {
-      refreshTrackerForEncounterState();
+      refreshTrackerForEncounterState({ reopen: false });
       renderCinematicHud();
       renderInfluenceSidebar();
     }
@@ -5813,8 +5813,10 @@ Hooks.on("updateSetting", (setting) => {
     ...Object.values(MANUAL_MODE_SETTING_BY_TYPE), SETTINGS.manualModeAll
   ].includes(setting.key)) return;
   renderInfluenceSidebar();
-  refreshTrackerForEncounterState();
-  renderCinematicHud();
+  // Encounter record writes happen for every editor save. They update the
+  // sidebar data, but must never open a tracker the user deliberately closed.
+  refreshTrackerForEncounterState({ reopen: false });
+  if (setting.key !== SETTINGS.encounters) renderCinematicHud();
 });
 
 for (const hook of ["createJournalEntry", "updateJournalEntry", "deleteJournalEntry", "createFolder", "updateFolder", "deleteFolder"]) {
@@ -5824,8 +5826,10 @@ for (const hook of ["createJournalEntry", "updateJournalEntry", "deleteJournalEn
       : document?.type === "JournalEntry" && (document.getFlag(MODULE_ID, "encounterFolder") || document.getFlag(MODULE_ID, "encounterRoot"));
     if (!relevant) return;
     renderInfluenceSidebar();
-    refreshTrackerForEncounterState();
-    renderCinematicHud();
+    // Journal CRUD is persistence plumbing, not an instruction to reopen the
+    // active encounter panel.
+    refreshTrackerForEncounterState({ reopen: false });
+    if (document?.documentName === "JournalEntry" && document.getFlag(MODULE_ID, "encounterId") === Store.activeId()) renderCinematicHud();
   });
 }
 
@@ -5848,8 +5852,8 @@ Hooks.on("getSceneControlButtons", (controls) => {
 Hooks.on("influenceEncounterUpdated", (id) => {
   // The directory must refresh for draft encounters too, not only the active one.
   renderInfluenceSidebar();
-  if (id === Store.activeId()) {
-    tracker?.render({ force: false });
+  if (id === Store.activeId() && tracker?.rendered) {
+    tracker.render({ force: false });
     renderCinematicHud();
     if (game.user.isGM) game.socket.emit(SOCKET, { action: "refresh" });
   }
