@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.20 — 2026-11-08
+
+- Expanded **Manual Mode** into a GM-configurable policy for every encounter type: Influence, Research, Chase, Skill, Infiltration, and Starship.
+- Added **Manual Mode — All Encounter Types** to override the individual encounter-type settings for a fully table-rolled game.
+- Manual Starship encounters retain role and action selection, then let a player mark their selected action resolved while the GM records the outcome.
+
 ## 0.8.19 — 2026-11-07
 
 - Added **Infiltration Encounters** for PF2e, with GM-configured objectives, Awareness Points, party and personal Edge Points, group or individual obstacle progress, and optional Global Progress Clock support for Awareness.

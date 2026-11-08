@@ -11,7 +11,13 @@ const SETTINGS = {
   selections: "userSelections",
   highlightOnActivation: "highlightOnActivation",
   showProgressClocks: "showProgressClocks",
-  manualMode: "manualMode"
+  manualMode: "manualMode",
+  manualModeAll: "manualModeAll",
+  manualModeResearch: "manualModeResearch",
+  manualModeChase: "manualModeChase",
+  manualModeSkill: "manualModeSkill",
+  manualModeInfiltration: "manualModeInfiltration",
+  manualModeStarship: "manualModeStarship"
 };
 const { ApplicationV2, DialogV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -21,8 +27,18 @@ const esc = (value = "") => foundry.utils.escapeHTML(String(value));
 const signed = (n) => `${n >= 0 ? "+" : ""}${n}`;
 const PLAYER_ROLL_STATES = new Set(["awaiting-player-roll", "awaiting-final-result"]);
 
-function manualInfluenceMode(encounter) {
-  return encounter?.subsystemType === "influence" && game.settings.get(MODULE_ID, SETTINGS.manualMode);
+const MANUAL_MODE_SETTING_BY_TYPE = {
+  influence: SETTINGS.manualMode,
+  research: SETTINGS.manualModeResearch,
+  chase: SETTINGS.manualModeChase,
+  skill: SETTINGS.manualModeSkill,
+  infiltration: SETTINGS.manualModeInfiltration,
+  starship: SETTINGS.manualModeStarship
+};
+
+function manualEncounterMode(encounter) {
+  const setting = MANUAL_MODE_SETTING_BY_TYPE[encounter?.subsystemType];
+  return !!setting && (game.settings.get(MODULE_ID, SETTINGS.manualModeAll) || game.settings.get(MODULE_ID, setting));
 }
 
 function defaultInfiltrationData() {
@@ -408,6 +424,7 @@ function playerRollChecks(encounter) {
 }
 
 function starshipTrackerContext(encounter) {
+  const manualMode = manualEncounterMode(encounter);
   const participants = encounterParticipants(encounter);
   const selection = encounterViewSelection(encounter);
   const selectedActor = participants.find((actor) => actor.id === selection.actorId) ?? null;
@@ -479,10 +496,11 @@ function starshipTrackerContext(encounter) {
     heart: starshipShipContext(hostileShip),
     actors: participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter.actorsActed?.[actor.id], roleLabel: starshipRole(encounter, starship.roleSelections[actor.id])?.label ?? "Unassigned" })),
     checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry, typeLabel: entry.type === "starship" ? "Crew Action" : entry.type, displayOutcome: entry.outcome })),
-    controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, playerRollChecks: playerRollChecks(encounter), tableSpotlight, finished, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
+    controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, playerRollChecks: manualMode ? [] : playerRollChecks(encounter), tableSpotlight, finished, manualMode, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
     canClaimRole: encounter.status === "active" && starship.stage === "role-selection" && !!selectedActor,
     canStartStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "role-selection" && !finished,
     canTakeStarshipAction: encounter.status === "active" && starship.stage === "actions" && !!selectedActor && !!selectedRole && !!selectedActionId && !!selectedSkillSlug && !encounter.actorsActed?.[selectedActor.id] && !finished,
+    starshipActionButtonLabel: manualMode ? "Mark Action Resolved" : "Take My Selected Action",
     canNextStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "actions" && !encounter.pendingChecks?.length && !finished,
     canPause: game.user.isGM && encounter.status === "active", canResume: game.user.isGM && encounter.status === "paused", canOpenForPlayers: game.user.isGM && encounter.status === "active",
     canEndEncounter: game.user.isGM && encounter.status === "active" && !!starshipOutcome,
@@ -2157,9 +2175,10 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       boons: threshold.boons.filter((boon) => game.user.isGM || boon.playerVisible)
     }));
     const knownDiscoveries = (encounter?.discoveries?.[game.user.id]?.npcs?.[activeNpc?.id]?.facts ?? []).map(concealDiscoveryDC);
-    const manualMode = !game.user.isGM && manualInfluenceMode(encounter);
+    const manualMode = !game.user.isGM && manualEncounterMode(encounter);
+    const manualInfluence = manualMode && encounter?.subsystemType === "influence";
     const selectedActor = participants.find((actor) => actor.id === selection.actorId) ?? null;
-    const knownInfluenceSkills = manualMode && selectedActor && activeNpcRecord
+    const knownInfluenceSkills = manualInfluence && selectedActor && activeNpcRecord
       ? knownConfiguredSkills(selectedActor, activeNpcRecord.influence, activeNpcRecord, "known").map((skill) => skill.label)
       : [];
     const pendingByLog = new Map((encounter?.pendingDiscoveries ?? []).map((pending) => [pending.logEntryId, pending]));
@@ -2196,7 +2215,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
         : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
     const infiltrationObjectiveView = selectedInfiltrationObjective ? { ...selectedInfiltrationObjective, name: selectedInfiltrationObjective.name, obstacleCount: infiltrationObstacles(encounter, selectedInfiltrationObjective.id).length } : null;
     const edgePoints = isInfiltration ? { party: Number(encounter.infiltration.edgePoints.party) || 0, personal: Math.max(0, Number(encounter.infiltration.edgePoints.byActor?.[selection.actorId]) || 0) } : null;
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints,
+    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, manualInfluence, checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints,
       researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
       pointLabel: isResearch ? "RP" : isChase ? "CP" : isSkill ? "SP" : isInfiltration ? "IP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : isSkill ? "Skill Challenges" : isInfiltration ? "Infiltration Obstacles" : "Influence Targets",
       actionLabel: isResearch ? "Research" : (isChase || isSkill || isInfiltration) ? "Make a Check" : "Influence", currentPoints,
@@ -2264,7 +2283,10 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
         return setStarshipActionSelection(encounter, actorId, target.dataset.activityId);
       }
       if (action === "take-starship-action") {
-        return requestStarshipCheck(encounter, encounterViewSelection(encounter).actorId);
+        const actorId = encounterViewSelection(encounter).actorId;
+        return manualEncounterMode(encounter)
+          ? recordManualStarshipAction(encounter, actorId)
+          : requestStarshipCheck(encounter, actorId);
       }
       if (action === "start-starship-round") return startStarshipRound(encounter.id);
       if (action === "next-starship-round") return nextStarshipRound(encounter.id);
@@ -2852,7 +2874,7 @@ function renderInfluenceSidebarContent() {
       const score = skillEncounter && encounter.skillScoringMode === "individual" && encounter.publicPoints ? ` <small>${skillActorPoints(encounter, actor.id)} SP</small>` : "";
       const contents = `<img src="${esc(participantPortrait(actor))}" alt=""><span>${esc(participantDisplayName(encounter, actor))}${score}</span><i class="fa-solid ${acted ? "fa-check" : "fa-hourglass"}" title="${acted ? "Acted this round" : "Has not acted"}"></i>`;
       return owned
-        ? `<button type="button" data-action="select-participant" data-id="${actor.id}" class="influence-sidebar-person ${acted ? "acted" : ""} ${selected ? "selected" : ""}" ${acted && !manualInfluenceMode(encounter) ? "disabled" : ""} title="${acted && !manualInfluenceMode(encounter) ? "This PC has already acted" : `Review as ${esc(participantDisplayName(encounter, actor))}`}">${contents}</button>`
+        ? `<button type="button" data-action="select-participant" data-id="${actor.id}" class="influence-sidebar-person ${acted ? "acted" : ""} ${selected ? "selected" : ""}" ${acted && !manualEncounterMode(encounter) ? "disabled" : ""} title="${acted && !manualEncounterMode(encounter) ? "This PC has already acted" : `Review as ${esc(participantDisplayName(encounter, actor))}`}">${contents}</button>`
         : `<div class="influence-sidebar-person ${acted ? "acted" : ""}">${contents}</div>`;
     }).join("");
     const activeObstacleIndex = chase ? Math.max(0, encounter.npcs.findIndex((npc) => npc.id === encounter.activeNpcId)) : -1;
@@ -2870,10 +2892,10 @@ function renderInfluenceSidebarContent() {
     const points = research ? encounter.researchPoints : skillEncounter && encounter.skillScoringMode === "individual" ? skillActorPoints(encounter, selection.actorId) : skillEncounter ? encounter.skillPoints : activeNpc?.points ?? 0;
     const pointLabel = research ? "RP" : chase ? "CP" : skillEncounter ? "SP" : "IP";
     const researchDisabled = research && !researchSourceAvailableForActor(activeNpc, selection.actorId) ? " disabled" : "";
-    const actions = manualInfluenceMode(encounter) ? "" : research ? `<button data-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-action="chase"><i class="fa-solid fa-person-running"></i> Make a Check</button>' : skillEncounter ? '<button data-action="skill"><i class="fa-solid fa-dice-d20"></i> Make a Check</button>' : '<button data-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
+    const actions = manualEncounterMode(encounter) ? "" : research ? `<button data-action="research"${researchDisabled}><i class="fa-solid fa-book-open"></i> Research</button>` : chase ? '<button data-action="chase"><i class="fa-solid fa-person-running"></i> Make a Check</button>' : skillEncounter ? '<button data-action="skill"><i class="fa-solid fa-dice-d20"></i> Make a Check</button>' : '<button data-action="discovery"><i class="fa-solid fa-magnifying-glass"></i> Discovery</button><button data-action="influence"><i class="fa-solid fa-comments"></i> Influence</button>';
     const chaseStatus = !isBeatClock && obscureChaseCourse ? `<p class="chase-relative-status">The ${esc(encounter.chaseSubject?.label || "Subject")} is ${encounter.chaseType === "run-away" || /pursuer/i.test(encounter.chaseSubject?.label || "") ? "behind you" : "ahead of you"}.</p>` : "";
     const skillGoal = skillEncounter && encounter.skillVictoryMode === "goal" ? `/${encounter.skillPointGoal}` : "";
-    const manualNotice = manualInfluenceMode(encounter) ? '<p class="hint influence-manual-mode-note">Manual Mode: roll at the table; your GM records Influence Points.</p>' : "";
+    const manualNotice = manualEncounterMode(encounter) ? '<p class="hint influence-manual-mode-note">Manual Mode: roll at the table; your GM records the outcome.</p>' : "";
     panel.innerHTML = `<header class="influence-sidebar-header"><div><h2>${esc(encounter.name)}</h2><p>${research ? `${encounter.researchInterval.value} ${esc(encounter.researchInterval.unit)} interval` : (chase || skillEncounter) ? `Round ${encounter.currentRound}${(skillEncounter || isBeatClock) && encounter.roundLimit ? ` of ${encounter.roundLimit}` : ""}` : `Phase ${encounter.currentPhase} of ${encounter.phases}`}</p></div><strong>${game.user.isGM || encounter.publicPoints ? `${points}${chase && activeNpc?.maximumPoints ? `/${activeNpc.maximumPoints}` : skillGoal} ${pointLabel}` : `— ${pointLabel}`}</strong></header><div class="influence-sidebar-body"><h3>PCs in the Encounter</h3><div class="influence-sidebar-people">${actorRows || "<p>No participants.</p>"}</div><h3>${research ? "Research Sources" : chase ? "Chase Course" : skillEncounter ? "Skill Challenges" : "Influence Targets"}</h3>${chaseStatus}<div class="influence-sidebar-npcs">${npcRows}</div>${manualNotice}<div class="influence-sidebar-actions"><button data-action="open"><i class="fa-solid fa-up-right-from-square"></i> Open Encounter</button>${encounter.status === "active" && !encounter.skillOutcome ? actions : ""}</div></div>`;
   }
   return { html: panel.innerHTML, directory: panel.classList.contains("directory") };
@@ -3518,7 +3540,7 @@ async function handleSidebarAction(event) {
   if (action === "select-participant" && !game.user.isGM) {
     const actor = game.actors.get(event.currentTarget.dataset.id);
     if (!encounterParticipants(encounter).some((participant) => participant.id === actor?.id) || !canUserControlActor(actor)) return ui.notifications.warn("You do not own that participating PC.");
-    if (encounter.actorsActed?.[actor.id] && !manualInfluenceMode(encounter)) return ui.notifications.info(`${actor.name} has already acted this ${["chase", "skill"].includes(encounter.subsystemType) ? "round" : encounter.subsystemType === "research" ? "research interval" : "phase"}.`);
+    if (encounter.actorsActed?.[actor.id] && !manualEncounterMode(encounter)) return ui.notifications.info(`${actor.name} has already acted this ${["chase", "skill"].includes(encounter.subsystemType) ? "round" : encounter.subsystemType === "research" ? "research interval" : "phase"}.`);
     await setEncounterViewSelection(encounter, { actorId: actor.id });
     renderInfluenceSidebar();
     tracker?.render({ force: false });
@@ -4400,8 +4422,57 @@ async function requestStarshipCheck(encounter, actorId) {
   if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
 }
 
+async function recordManualStarshipAction(encounter, actorId, selectionOverride = null) {
+  if (!game.user.isGM) {
+    const localSelection = encounterViewSelection(encounter);
+    const selection = encounter?.starship?.actionSelections?.[actorId]
+      ?? (localSelection.starshipRound === Number(encounter.currentRound)
+        ? { activityId: localSelection.starshipActionId, skillSlug: localSelection.starshipSkillSlug, proposed: !!localSelection.starshipProposed }
+        : null);
+    return game.socket.emit(SOCKET, { action: "manual-starship-action", encounterId: encounter.id, actorId, selection, userId: game.user.id });
+  }
+  const actor = game.actors.get(actorId);
+  const roleId = encounter?.starship?.roleSelections?.[actorId];
+  const localSelection = encounterViewSelection(encounter);
+  const selection = selectionOverride ?? encounter?.starship?.actionSelections?.[actorId]
+    ?? (!game.user.isGM && localSelection.starshipRound === Number(encounter.currentRound)
+      ? { activityId: localSelection.starshipActionId, skillSlug: localSelection.starshipSkillSlug, proposed: !!localSelection.starshipProposed }
+      : null);
+  const role = starshipRole(encounter, roleId);
+  const activity = starshipActivityFor(encounter, roleId, selection?.activityId);
+  const skill = starshipSelectedSkill(actor, activity, selection);
+  if (!actor || !role || !activity || !skill) return ui.notifications.warn("Choose a role, activity, and trained eligible statistic first.");
+  if (encounter.actorsActed?.[actor.id]) return ui.notifications.warn(`${actor.name} has already acted this round.`);
+  snapshot(encounter, `${participantDisplayName(encounter, actor)}: ${activity.label} (manual)`);
+  encounter.actorsActed[actor.id] = true;
+  const hostileShip = starshipShip(encounter.starship, "hostile");
+  encounter.checkLog.push({
+    id: randomID(), actorId: actor.id, actorName: participantDisplayName(encounter, actor),
+    npcId: starshipShipKey(encounter.starship, "hostile"), npcName: hostileShip?.name ?? "Hostile ship",
+    type: "starship", skillLabel: skill.label, outcome: "Resolved Manually", phase: encounter.currentRound,
+    timestamp: Date.now(), detailLabel: role.label, details: [`${activity.label} resolved at the table.`]
+  });
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+  await ChatMessage.create({
+    content: `<div class="influence-chat"><strong>${esc(encounter.name)} — Manual Starship Action</strong><p>${esc(participantDisplayName(encounter, actor))} used ${esc(skill.label)} for ${esc(activity.label)}. The GM resolves the outcome at the table.</p></div>`,
+    style: CONST.CHAT_MESSAGE_STYLES.OOC,
+    flags: { [MODULE_ID]: { messageKind: "manual-starship-action" } }
+  });
+  tracker?.render({ force: false });
+}
+
+async function receiveManualStarshipAction(payload) {
+  if (!game.user.isGM || game.users.activeGM?.id !== game.user.id) return;
+  const encounter = Store.get(payload.encounterId);
+  const actor = game.actors.get(payload.actorId);
+  const user = game.users.get(payload.userId);
+  if (!encounter || encounter.subsystemType !== "starship" || !manualEncounterMode(encounter) || !actor || (!user?.isGM && !canUserControlActor(actor, user))) return;
+  await recordManualStarshipAction(encounter, actor.id, payload.selection);
+}
+
 async function requestCheck(encounter, type, selectedActorId = null, selectedNpcId = null) {
-  if (manualInfluenceMode(encounter)) return ui.notifications.info("Manual Mode is enabled. Roll at the table; the GM records Influence Points.");
+  if (manualEncounterMode(encounter)) return ui.notifications.info("Manual Mode is enabled. Roll at the table; the GM records the outcome.");
   const npc = encounter.npcs.find((entry) => entry.id === selectedNpcId) ?? encounter.npcs.find((entry) => entry.id === encounter.activeNpcId) ?? encounter.npcs[0];
   const isResearch = type === "research" || encounter.subsystemType === "research";
   const isChase = type === "chase" || encounter.subsystemType === "chase";
@@ -4732,8 +4803,8 @@ async function resolveSubmittedPlayerRoll(payload) {
 async function enqueueCheckRequest(payload) {
   if (!game.user.isGM || game.users.activeGM?.id !== game.user.id) return;
   const encounter = Store.get(payload.encounterId);
-  if (manualInfluenceMode(encounter)) {
-    game.socket.emit(SOCKET, { action: "check-request-status", userId: payload.requesterId, message: "Manual Mode is enabled. Roll at the table; the GM records Influence Points." });
+  if (manualEncounterMode(encounter)) {
+    game.socket.emit(SOCKET, { action: "check-request-status", userId: payload.requesterId, message: "Manual Mode is enabled. Roll at the table; the GM records the outcome." });
     return;
   }
   const actor = game.actors.get(payload.actorId);
@@ -5580,8 +5651,8 @@ Hooks.once("init", () => {
     requiresReload: false
   });
   game.settings.register(MODULE_ID, SETTINGS.manualMode, {
-    name: "Manual Mode",
-    hint: "For Influence encounters, player panels become information-only. Players roll at the table while the GM records Influence Points manually.",
+    name: "Manual Mode — Influence Encounters",
+    hint: "Player panels become information-only. Players roll at the table while the GM records results manually.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -5590,6 +5661,26 @@ Hooks.once("init", () => {
     requiresReload: false,
     onChange: () => refreshTrackerForEncounterState()
   });
+  game.settings.register(MODULE_ID, SETTINGS.manualModeAll, {
+    name: "Manual Mode — All Encounter Types",
+    hint: "Overrides the individual Manual Mode settings. Players roll at the table while the GM records results manually.",
+    scope: "world", config: true, type: Boolean, default: false, restricted: true, requiresReload: false,
+    onChange: () => refreshTrackerForEncounterState()
+  });
+  for (const [setting, name] of [
+    [SETTINGS.manualModeResearch, "Research Encounters"],
+    [SETTINGS.manualModeChase, "Chase Encounters"],
+    [SETTINGS.manualModeSkill, "Skill Encounters"],
+    [SETTINGS.manualModeInfiltration, "Infiltration Encounters"],
+    [SETTINGS.manualModeStarship, "Starship Encounters"]
+  ]) {
+    game.settings.register(MODULE_ID, setting, {
+      name: `Manual Mode — ${name}`,
+      hint: "Players roll at the table while the GM records results manually.",
+      scope: "world", config: true, type: Boolean, default: false, restricted: true, requiresReload: false,
+      onChange: () => refreshTrackerForEncounterState()
+    });
+  }
   foundry.applications.handlebars.loadTemplates([
     `modules/${MODULE_ID}/templates/trait-fields.hbs`,
     `modules/${MODULE_ID}/templates/sidebar.hbs`,
@@ -5621,6 +5712,7 @@ Hooks.once("ready", async () => {
     if (payload.action === "player-roll-submit" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveSubmittedPlayerRoll(payload);
     if (payload.action === "starship-role" && game.user.isGM && game.users.activeGM?.id === game.user.id) assignStarshipRole(payload);
     if (payload.action === "starship-action-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) saveStarshipActionSelection(payload);
+    if (payload.action === "manual-starship-action" && game.user.isGM && game.users.activeGM?.id === game.user.id) receiveManualStarshipAction(payload);
     if (payload.action === "check-request-status" && payload.userId === game.user.id) ui.notifications.info(payload.message);
     if (payload.action === "discovery-offer" && payload.userId === game.user.id) collectDiscoveryChoices(payload.choices, payload.actorId).then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
     if (payload.action === "discovery-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveDiscovery(payload.encounterId, payload.userId, payload.selections, payload.logEntryId);
@@ -5716,7 +5808,10 @@ Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); 
 // world setting to another client. Refresh from the Setting update itself so
 // player pickers use the saved encounter data, not a just-stale local copy.
 Hooks.on("updateSetting", (setting) => {
-  if (setting.namespace !== MODULE_ID || ![SETTINGS.encounters, SETTINGS.active, SETTINGS.storageVersion, SETTINGS.manualMode].includes(setting.key)) return;
+  if (setting.namespace !== MODULE_ID || ![
+    SETTINGS.encounters, SETTINGS.active, SETTINGS.storageVersion,
+    ...Object.values(MANUAL_MODE_SETTING_BY_TYPE), SETTINGS.manualModeAll
+  ].includes(setting.key)) return;
   renderInfluenceSidebar();
   refreshTrackerForEncounterState();
   renderCinematicHud();
