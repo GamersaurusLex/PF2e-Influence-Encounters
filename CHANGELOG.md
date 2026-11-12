@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.22 — 2026-11-12
+
+- Preserved player-owned PF2e Hero Point rerolls across every automated encounter type: Influence, Discovery, Research, Chase, Skill, Infiltration, and Starship. An approved player roll remains pending until the player submits its final result, and a Hero Point reroll updates that pending result.
+- Added a GM-only **Correct Outcome** control for the most recent resolved check. It safely restores the pre-check state, reapplies the chosen degree of success, updates the tracker, and posts an explicit correction card to chat. Undo later encounter changes before correcting an earlier check.
+- Improved Discovery choices so a discovery learned earlier in a critical-success selection cannot be selected again. Added player-safe discoveries for **My Best Influence Option** and **Best Party Lore Option**, which compare configured DCs and actual PC modifiers without exposing numbers.
+
 ## 0.8.21 — 2026-11-08
 
 - Fixed saving, deleting, or otherwise persisting an encounter reopening the active or paused encounter tracker. Directory data now refreshes without treating Journal and setting updates as a request to open the tracker.

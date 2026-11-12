@@ -495,7 +495,11 @@ function starshipTrackerContext(encounter) {
     primorata: starshipShipContext(friendlyShip),
     heart: starshipShipContext(hostileShip),
     actors: participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter.actorsActed?.[actor.id], roleLabel: starshipRole(encounter, starship.roleSelections[actor.id])?.label ?? "Unassigned" })),
-    checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry, typeLabel: entry.type === "starship" ? "Crew Action" : entry.type, displayOutcome: entry.outcome })),
+    checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry,
+      typeLabel: entry.type === "starship" ? "Crew Action" : entry.type,
+      displayOutcome: entry.outcome,
+      canCorrectOutcome: game.user.isGM && entry.correctionSnapshotId === encounter.history?.at(-1)?.id
+    })),
     controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, playerRollChecks: manualMode ? [] : playerRollChecks(encounter), tableSpotlight, finished, manualMode, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
     canClaimRole: encounter.status === "active" && starship.stage === "role-selection" && !!selectedActor,
     canStartStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "role-selection" && !finished,
@@ -1754,8 +1758,10 @@ function snapshot(encounter, label) {
   const copy = deepClone(encounter);
   copy.history = [];
   encounter.history ??= [];
-  encounter.history.push({ id: randomID(), at: Date.now(), label, state: copy });
+  const entry = { id: randomID(), at: Date.now(), label, state: copy };
+  encounter.history.push(entry);
   if (encounter.history.length > 50) encounter.history.shift();
+  return entry;
 }
 
 function balancedChasePoints(basePoints, participantCount, designedPartySize) {
@@ -2117,7 +2123,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       "cancel-request", "resolve-request-manually", "reopen-player-roll", "forget-request", "roll-approved-check", "submit-approved-check", "open-for-players", "pause", "resume", "victory-splash", "reveal-influence-rewards",
       "undo", "next-round", "prior", "advance", "pass-obstacle", "adjust", "change-ip", "apply-reward",
       "reset-actions", "declare-skill-outcome", "declare-chase-outcome", "declare-infiltration-outcome", "spend-edge", "adjust-infiltration-resource", "trigger-infiltration-complication",
-      "end-encounter", "remove-effect", "resolve-pending-discovery"
+      "end-encounter", "remove-effect", "resolve-pending-discovery", "correct-outcome"
     ].map((action) => [action, function(event, target) { return this._action(event, target); }]))
   };
   static PARTS = { tracker: { template: `modules/${MODULE_ID}/templates/tracker.hbs` } };
@@ -2185,6 +2191,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     const checkLog = [...(encounter?.checkLog ?? [])].reverse().map((entry) => ({ ...entry,
       typeLabel: entry.type === "research" ? "Research" : entry.type === "chase" ? "Chase" : entry.type === "infiltration" ? "Infiltration" : entry.type === "skill" ? "Skill" : entry.type === "discovery" ? "Discovery" : "Influence",
       pendingDiscovery: pendingByLog.get(entry.id),
+      canCorrectOutcome: game.user.isGM && entry.correctionSnapshotId === encounter.history?.at(-1)?.id,
       details: !showInfluenceRewards && entry.type === "influence" ? [] : entry.type === "discovery" ? (entry.details ?? []).map(concealDiscoveryDC) : (entry.details ?? []),
       displayOutcome: !game.user.isGM && (entry.type === "discovery" || entry.outcome.includes("Invalid Influence Skill"))
         ? (entry.outcome.includes("Invalid") ? "Failure" : entry.outcome.startsWith("Critical Success") ? "Critical Success" : entry.outcome.startsWith("Success") ? "Success" : "Failure")
@@ -2334,6 +2341,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       return request ? adjudicate(request) : ui.notifications.warn("That queued check is no longer available.");
     }
     if (action === "resolve-request-manually") return resolveCheckManually(encounter.id, target.dataset.id);
+    if (action === "correct-outcome") return correctResolvedOutcome(encounter.id, target.dataset.id);
     if (action === "reopen-player-roll") return reopenPlayerRoll(encounter.id, target.dataset.id);
     if (action === "forget-request") return forgetPendingCheck(encounter.id, target.dataset.id);
     if (action === "cancel-request") return cancelPendingCheck(encounter.id, target.dataset.id, "The GM canceled this check request.");
@@ -4621,7 +4629,7 @@ async function reopenPlayerRoll(encounterId, requestId) {
   tracker?.render({ force: true });
 }
 
-async function chooseManualOutcome() {
+async function chooseManualOutcome({ title = "Resolve Check Manually", hint = "This immediately applies the normal encounter result without rolling." } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (value) => {
@@ -4630,8 +4638,8 @@ async function chooseManualOutcome() {
       resolve(value);
     };
     DialogV2.wait({
-      window: { title: "Resolve Check Manually" },
-      content: `<div class="form-group"><label>Final outcome</label><select name="degree"><option value="0">Critical Failure</option><option value="1">Failure</option><option value="2" selected>Success</option><option value="3">Critical Success</option></select><p class="hint">This immediately applies the normal encounter result without rolling.</p></div>`,
+      window: { title },
+      content: `<div class="form-group"><label>Final outcome</label><select name="degree"><option value="0">Critical Failure</option><option value="1">Failure</option><option value="2" selected>Success</option><option value="3">Critical Success</option></select><p class="hint">${esc(hint)}</p></div>`,
       buttons: [
         { action: "resolve", default: true, icon: "fas fa-check", label: "Apply Result", callback: (_event, button) => finish(Number(button.form.elements.degree.value)) },
         { action: "cancel", label: "Cancel", callback: () => finish(null) }
@@ -4669,6 +4677,39 @@ async function resolveCheckManually(encounterId, requestId) {
   if (!encounter || !request) return ui.notifications.warn("That queued check is no longer available.");
   if (request.status === "requested") return adjudicate(request, { resolveManually: true });
   return resolveApprovedCheckManually(encounterId, requestId);
+}
+
+async function correctResolvedOutcome(encounterId, logEntryId) {
+  if (!game.user.isGM) return;
+  const encounter = Store.get(encounterId);
+  const original = encounter?.checkLog?.find((entry) => entry.id === logEntryId);
+  const snapshotId = original?.correctionSnapshotId;
+  const snapshotIndex = encounter?.history?.findIndex((entry) => entry.id === snapshotId) ?? -1;
+  if (!encounter || !original || snapshotIndex < 0) return ui.notifications.warn("That check cannot be corrected because its pre-check snapshot is unavailable.");
+  if (snapshotIndex !== encounter.history.length - 1) return ui.notifications.warn("Correct Outcome is available only for the most recent encounter change. Undo later changes first.");
+  const snapshotEntry = encounter.history[snapshotIndex];
+  const originalOutcome = original.outcome;
+  const actor = game.actors.get(original.actorId);
+  const savedRequest = snapshotEntry.state?.pendingChecks?.find((entry) => entry.id === original.correctionRequestId);
+  if (!actor || !savedRequest?.approval) return ui.notifications.warn("The original check request is no longer available for correction.");
+  const degree = await chooseManualOutcome({
+    title: "Correct Outcome",
+    hint: `Replace ${original.actorName}'s ${originalOutcome} with the selected result. The encounter will recalculate from immediately before that check.`
+  });
+  if (![0, 1, 2, 3].includes(degree)) return;
+  const restored = deepClone(snapshotEntry.state);
+  const history = encounter.history.slice(0, snapshotIndex);
+  Object.assign(encounter, restored, { history });
+  const request = encounter.pendingChecks?.find((entry) => entry.id === original.correctionRequestId);
+  if (!request?.approval) return ui.notifications.warn("The original check request could not be restored for correction.");
+  const correction = { logEntryId: original.id, originalOutcome, correctedAt: Date.now() };
+  const roll = { total: 0, degreeOfSuccess: degree, manual: true, correction };
+  if (request.type === "starship") {
+    const { role, activity, skill, selected, dcAdjust } = request.approval;
+    return executeStarshipCheck(encounter, request, actor, role, activity, { ...skill, invalidStarship: false }, selected, Number(dcAdjust) || 0, roll);
+  }
+  const { skill, selected, dcAdjust } = request.approval;
+  return executeCheck(encounter, request, actor, { ...skill, invalidDiscovery: false, invalidInfluence: false }, selected, Number(dcAdjust) || 0, roll);
 }
 
 async function approvePlayerCheck(encounter, request, actor, approval, { notifyPlayer = true } = {}) {
@@ -5080,9 +5121,12 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
   const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
   const actorName = participantDisplayName(encounter, actor);
-  snapshot(encounter, `${actorName}: ${activity.label}`);
+  const correctionSnapshot = snapshot(encounter, `${actorName}: ${activity.label}`);
   const hostileShip = starshipShip(encounter.starship, "hostile");
   const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: starshipShipKey(encounter.starship, "hostile"), npcName: hostileShip?.name ?? "Hostile ship", type: "starship", skillLabel: skill.label, outcome: skill.invalidStarship ? `${outcome} — Invalid Crew Statistic` : outcome, phase: encounter.currentRound, timestamp: Date.now(), detailLabel: role.label, details: [activity.label] };
+  logEntry.correctionSnapshotId = correctionSnapshot.id;
+  logEntry.correctionRequestId = request.id;
+  if (roll.correction) logEntry.correctedFrom = roll.correction;
   encounter.checkLog.push(logEntry);
   encounter.actorsActed[actor.id] = true;
   encounter.pendingChecks = encounter.pendingChecks.filter((entry) => entry.id !== request.id);
@@ -5107,11 +5151,17 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   const priorStarshipOutcome = encounter.starship.outcome || "";
   const starshipOutcome = updateStarshipCalculatedOutcome(encounter);
   if (starshipOutcome) logEntry.details.push(starshipOutcome === "victory" ? "Starship victory." : "Starship defeat.");
+  if (roll.correction) logEntry.details.push(`GM corrected outcome from ${roll.correction.originalOutcome}.`);
   await Store.save(encounter);
   await announceStarshipOutcome(encounter, priorStarshipOutcome);
   game.socket.emit(SOCKET, { action: "refresh" });
   const outcomeLabel = roll.manual ? `GM Adjudicated ${outcome}` : outcome;
   await ChatMessage.create({ content: `<div class="influence-chat influence-result influence-outcome-${outcomeClass}"><strong>${esc(encounter.name)} — ${esc(role.label)}</strong><p>${esc(actorName)} used ${esc(skill.label)} for ${esc(activity.label)}: <strong>${outcomeLabel}</strong>.</p>${damageReport}</div>`, style: CONST.CHAT_MESSAGE_STYLES.OOC, flags: { [MODULE_ID]: { messageKind: "result" } } });
+  if (roll.correction) await ChatMessage.create({
+    content: `<div class="influence-chat influence-result"><strong>Outcome Corrected</strong><p>The GM corrected ${esc(actorName)}’s ${esc(activity.label)} result from ${esc(roll.correction.originalOutcome)} to ${esc(outcome)}. The encounter now reflects the corrected result.</p></div>`,
+    style: CONST.CHAT_MESSAGE_STYLES.OOC,
+    flags: { [MODULE_ID]: { messageKind: "result" } }
+  });
   tracker?.render({ force: false });
 }
 
@@ -5177,11 +5227,14 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   const newlyReachedInfluenceThresholds = request.type === "influence"
     ? npc.thresholds.filter((threshold) => threshold.points > previousPoints && threshold.points <= previousPoints + points)
     : [];
-  snapshot(encounter, `${actorName} → ${npcName}: ${skill.label}`);
+  const correctionSnapshot = snapshot(encounter, `${actorName} → ${npcName}: ${skill.label}`);
   encounter.checkLog ??= [];
   const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: npc.id, npcName, type: request.type, degree,
     skillLabel: skill.label, outcome: skill.invalidDiscovery ? `${outcome} — Invalid Discovery Skill` : skill.invalidInfluence ? `${outcome} — Invalid Influence Skill` : outcome,
     phase: encounter.currentPhase, timestamp: Date.now(), detailLabel: "", details: [] };
+  logEntry.correctionSnapshotId = correctionSnapshot.id;
+  logEntry.correctionRequestId = request.id;
+  if (roll.correction) logEntry.correctedFrom = roll.correction;
   encounter.checkLog.push(logEntry);
   // A successful attempt proves this configured secret Discovery skill works,
   // so promote it to the public Discovery list for every participant.
@@ -5293,6 +5346,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     const boon = findBoon(encounter, boonId);
     if (boon) boon.remaining = Math.max(0, (boon.remaining ?? boon.uses) - 1);
   }
+  if (roll.correction) logEntry.details.push(`GM corrected outcome from ${roll.correction.originalOutcome}.`);
   await Store.save(encounter);
   game.socket.emit(SOCKET, { action: "refresh" });
   const resultText = request.type === "discovery"
@@ -5322,6 +5376,11 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
       flags: { [MODULE_ID]: { messageKind: "result" } }
     });
   }
+  if (roll.correction) await ChatMessage.create({
+    content: `<div class="influence-chat influence-result"><strong>Outcome Corrected</strong><p>The GM corrected ${esc(actorName)}’s ${esc(request.type.titleCase())} result against ${esc(npcName)} from ${esc(roll.correction.originalOutcome)} to ${esc(outcome)}. The encounter now reflects the corrected result.</p></div>`,
+    style: CONST.CHAT_MESSAGE_STYLES.OOC,
+    flags: { [MODULE_ID]: { messageKind: "result" } }
+  });
   if (request.type === "chase" && npc.availability === "exhausted") {
     const next = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
     await ChatMessage.create({
@@ -5378,24 +5437,85 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
 
 async function offerDiscovery(encounter, userId, choices, logEntryId, actorId) {
   if (userId === game.user.id) {
-    const selections = await collectDiscoveryChoices(choices, actorId);
+    const selections = await collectDiscoveryChoices(choices, actorId, { encounterId: encounter.id, logEntryId });
     return resolveDiscovery(encounter.id, userId, selections, logEntryId);
   }
   game.socket.emit(SOCKET, { action: "discovery-offer", encounterId: encounter.id, userId, choices, logEntryId, actorId });
 }
 
-async function collectDiscoveryChoices(choices, actorId) {
+function discoveryRevealState(record, { create = false } = {}) {
+  const reveals = record?.reveals ?? {};
+  if (create && record) record.reveals = reveals;
+  reveals.skills ??= {};
+  reveals.bestByActor ??= {};
+  return reveals;
+}
+
+function usableInfluenceSkills(actor, npc) {
+  const trained = new Map(trainedAttemptSkills(actor, npc).map((skill) => [skill.slug, skill]));
+  return availableSkillsForActor(actor, npc?.influence ?? [], npc).flatMap((skill) => {
+    const actorSkill = trained.get(skill.slug) ?? configuredSaveChoice(actor, skill);
+    const modifier = actorStatisticModifier(actor, skill);
+    return actorSkill && Number.isFinite(modifier) ? [{ ...skill, modifier }] : [];
+  });
+}
+
+function bestInfluenceSkillsForActor(actor, npc) {
+  const skills = usableInfluenceSkills(actor, npc);
+  const bestScore = Math.min(...skills.map((skill) => Number(skill.dc) - skill.modifier));
+  return Number.isFinite(bestScore)
+    ? skills.filter((skill) => Number(skill.dc) - skill.modifier === bestScore)
+    : [];
+}
+
+function bestPartyLoreSkills(encounter, npc) {
+  const candidates = encounterParticipants(encounter).flatMap((actor) => bestInfluenceSkillsForActor(actor, npc)
+    .filter((skill) => isLoreSkill(skill))
+    .map((skill) => ({ actor, skill, score: Number(skill.dc) - skill.modifier })));
+  const bestScore = Math.min(...candidates.map((candidate) => candidate.score));
+  return Number.isFinite(bestScore) ? candidates.filter((candidate) => candidate.score === bestScore) : [];
+}
+
+function discoveryChoiceOptions(encounter, npc, actor, record, selections = []) {
+  const reveals = discoveryRevealState(record);
+  const selected = new Set(selections.map((selection) => selection.choice));
+  const selectedSkills = new Set(selections.filter((selection) => selection.choice === "skill").map((selection) => selection.named));
+  const secret = npc?.discovery?.find((skill) => skill.secret);
+  const nonLore = (npc?.influence ?? []).filter((skill) => !skill.lore);
+  const low = nonLore.toSorted((a, b) => Number(a.dc) - Number(b.dc))[0];
+  const high = nonLore.toSorted((a, b) => Number(b.dc) - Number(a.dc))[0];
+  const skillChoices = trainedSkillChoicesWithPerception(actor)
+    .filter((skill) => !reveals.skills?.[skill.slug] && !selectedSkills.has(skill.slug));
+  const bestOptions = bestInfluenceSkillsForActor(actor, npc);
+  const partyLoreOptions = bestPartyLoreSkills(encounter, npc);
+  const options = [];
+  if (secret && !reveals.secret && !selected.has("secret")) options.push(["secret", "Secret Discovery skill"]);
+  if (low && !low.known && !selected.has("low")) options.push(["low", "Lowest non-Lore Influence DC"]);
+  if (high && !high.known && !selected.has("high")) options.push(["high", "Highest non-Lore Influence DC"]);
+  // A critical success can ask about two different skills.  The named-skill
+  // picker below removes only the skill already selected in this same offer.
+  if (skillChoices.length) options.push(["skill", "Whether a specific skill is usable"]);
+  if (npc?.weakness && !reveals.weakness && !selected.has("weakness")) options.push(["weakness", "NPC weakness"]);
+  if (npc?.strength && !reveals.strength && !selected.has("strength")) options.push(["strength", "NPC strength"]);
+  if (bestOptions.length && !reveals.bestByActor?.[actor?.id] && !selected.has("my-best")) options.push(["my-best", "My best Influence option"]);
+  if (partyLoreOptions.length && !reveals.partyLore && !selected.has("party-lore")) options.push(["party-lore", "Best party Lore option"]);
+  return { options, skillChoices };
+}
+
+async function collectDiscoveryChoices(choices, actorId, { encounterId = Store.activeId(), logEntryId = "" } = {}) {
   const selections = [];
   const actor = game.actors.get(actorId);
+  const encounter = Store.get(encounterId);
+  const logEntry = encounter?.checkLog?.find((entry) => entry.id === logEntryId);
+  const npc = encounter?.npcs?.find((entry) => entry.id === logEntry?.npcId) ?? encounter?.npcs?.[0];
+  const record = encounter?.discoveries?.[game.user.id]?.npcs?.[npc?.id] ?? { facts: [], secretSkill: false };
+  if (!actor || !encounter || !npc) return selections;
   for (let i = 0; i < choices; i++) {
-    const options = [
-      ["secret", "Secret Discovery skill"], ["low", "Lowest non-Lore Influence DC"],
-      ["high", "Highest non-Lore Influence DC"], ["skill", "Whether a specific skill is usable"],
-      ["weakness", "NPC weakness"], ["strength", "NPC strength"]
-    ];
+    const { options, skillChoices } = discoveryChoiceOptions(encounter, npc, actor, record, selections);
+    if (!options.length) break;
     const choice = await promptSelect(`Discovery ${i + 1} of ${choices}`, options);
     if (!choice) break;
-    const skillOptions = trainedSkillChoices(actor).map((skill) => [skill.slug, skill.label]);
+    const skillOptions = skillChoices.map((skill) => [skill.slug, skill.label]);
     const named = choice === "skill" ? await promptSelect("Which trained skill do you ask about?", skillOptions, "Choose Skill") : "";
     if (choice !== "skill" || named) selections.push({ choice, named });
   }
@@ -5420,21 +5540,39 @@ async function resolveDiscovery(encounterId, userId, selections, logEntryId) {
   encounter.discoveries[userId].npcs ??= {};
   encounter.discoveries[userId].npcs[npc.id] ??= { facts: [], secretSkill: false };
   const discoveryRecord = encounter.discoveries[userId].npcs[npc.id];
+  const reveals = discoveryRevealState(discoveryRecord, { create: true });
+  const actor = game.actors.get(logEntry?.actorId);
   const learned = [];
   for (const selection of selections) {
     const { choice, named } = selection;
+    const { options, skillChoices } = discoveryChoiceOptions(encounter, npc, actor, discoveryRecord, []);
+    if (!options.some(([value]) => value === choice)) continue;
     let fact = "";
-    if (choice === "secret") { fact = secret ? `Secret Discovery Skill — ${secret.label}` : "No secret Discovery skill is configured."; discoveryRecord.secretSkill = !!secret; }
-    if (choice === "low") { fact = low ? `Lowest non-Lore DC — ${low.label}` : "No non-Lore Influence skill is configured."; if (low) low.known = true; }
-    if (choice === "high") { fact = high ? `Highest non-Lore DC — ${high.label}` : "No non-Lore Influence skill is configured."; if (high) high.known = true; }
-    if (choice === "weakness") fact = `${npc.weakness.label}: ${npc.weakness.description}`;
-    if (choice === "strength") fact = `${npc.strength.label}: ${npc.strength.description}`;
+    if (choice === "secret") { fact = secret ? `Secret Discovery Skill — ${secret.label}` : "No secret Discovery skill is configured."; discoveryRecord.secretSkill = !!secret; reveals.secret = true; }
+    if (choice === "low") { fact = low ? `Lowest non-Lore DC — ${low.label}` : "No non-Lore Influence skill is configured."; if (low) low.known = true; reveals.low = true; }
+    if (choice === "high") { fact = high ? `Highest non-Lore DC — ${high.label}` : "No non-Lore Influence skill is configured."; if (high) high.known = true; reveals.high = true; }
+    if (choice === "weakness") { fact = `${npc.weakness.label}: ${npc.weakness.description}`; reveals.weakness = true; }
+    if (choice === "strength") { fact = `${npc.strength.label}: ${npc.strength.description}`; reveals.strength = true; }
     if (choice === "skill") {
-      const askedSkill = game.actors.get(encounter.checkLog?.find((entry) => entry.id === logEntryId)?.actorId)?.skills?.[named];
-      const askedLabel = askedSkill ? game.i18n.localize(askedSkill.label) : named;
+      const askedChoice = skillChoices.find((skill) => skill.slug === named);
+      if (!askedChoice) continue;
+      const askedLabel = askedChoice.label;
       const found = npc.influence.find((s) => s.slug === named);
       fact = found ? `${found.label} can influence ${npcName}.` : `${askedLabel} is not among ${npcName}'s listed Influence skills.`;
       if (found) found.known = true;
+      reveals.skills[named] = true;
+    }
+    if (choice === "my-best") {
+      const best = bestInfluenceSkillsForActor(actor, npc);
+      if (!best.length) continue;
+      fact = `Your best Influence option — ${best.map((skill) => skill.label).join(" or ")}.`;
+      reveals.bestByActor[actor.id] = true;
+    }
+    if (choice === "party-lore") {
+      const best = bestPartyLoreSkills(encounter, npc);
+      if (!best.length) continue;
+      fact = `Best party Lore option — ${best.map(({ actor: owner, skill }) => `${skill.label} (${participantDisplayName(encounter, owner)})`).join(" or ")}.`;
+      reveals.partyLore = true;
     }
     discoveryRecord.facts.push(fact);
     learned.push(fact);
@@ -5460,7 +5598,7 @@ async function resumePendingDiscoveries() {
   const encounter = Store.get();
   const pending = (encounter?.pendingDiscoveries ?? []).filter((entry) => entry.userId === game.user.id);
   for (const entry of pending) {
-    const selections = await collectDiscoveryChoices(entry.choices, entry.actorId);
+    const selections = await collectDiscoveryChoices(entry.choices, entry.actorId, { encounterId: encounter.id, logEntryId: entry.logEntryId });
     if (selections.length) game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: encounter.id, userId: game.user.id, selections, logEntryId: entry.logEntryId });
   }
 }
@@ -5749,6 +5887,10 @@ Hooks.on("renderChatMessageHTML", markInfluenceChatMessage);
 // instead of replacing or monkey-patching the system's reroll workflow.
 const pendingRerollRequests = new Map();
 
+function chatMessageAuthorId(message) {
+  return message?.author?.id ?? message?.user?.id ?? message?.user ?? message?.speaker?.user ?? "";
+}
+
 function rollMessageOptions(message) {
   const options = message?.flags?.pf2e?.context?.options ?? message?.getFlag?.("pf2e", "context")?.options ?? [];
   return Array.isArray(options) ? options : options instanceof Set ? [...options] : Object.values(options ?? {});
@@ -5761,7 +5903,7 @@ function pendingCheckIdFromMessage(message) {
 }
 
 async function trackPlayerRollMessage(message, requestId) {
-  if (!requestId || message.user?.id !== game.user.id) return;
+  if (!requestId || chatMessageAuthorId(message) !== game.user.id) return;
   if (message.getFlag(MODULE_ID, "pendingCheckId") !== requestId) await message.setFlag(MODULE_ID, "pendingCheckId", requestId);
   // PF2e keeps a Hero Point reroll on the original card and appends the
   // replacement roll. The final roll is always the last roll on that card.
@@ -5781,13 +5923,13 @@ async function trackPlayerRollMessage(message, requestId) {
 }
 
 Hooks.on("preDeleteChatMessage", (message) => {
-  if (message.user?.id !== game.user.id) return;
+  if (chatMessageAuthorId(message) !== game.user.id) return;
   const requestId = pendingCheckIdFromMessage(message);
   if (requestId) pendingRerollRequests.set(message.actor?.id ?? message.speaker?.actor, requestId);
 });
 
 Hooks.on("createChatMessage", (message) => {
-  if (message.user?.id !== game.user.id) return;
+  if (chatMessageAuthorId(message) !== game.user.id) return;
   const actorId = message.actor?.id ?? message.speaker?.actor;
   const requestId = pendingCheckIdFromMessage(message)
     || (rollMessageOptions(message).includes("check:reroll") ? pendingRerollRequests.get(actorId) : "");
@@ -5797,7 +5939,7 @@ Hooks.on("createChatMessage", (message) => {
 });
 
 Hooks.on("updateChatMessage", (message) => {
-  if (message.user?.id !== game.user.id) return;
+  if (chatMessageAuthorId(message) !== game.user.id) return;
   const requestId = pendingCheckIdFromMessage(message);
   if (requestId) trackPlayerRollMessage(message, requestId);
 });
