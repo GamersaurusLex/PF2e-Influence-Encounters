@@ -108,6 +108,12 @@ test("only actual Fortune replacements auto-submit an approved player roll", () 
   assert.equal(hasFortuneReplacement({ rolls: [{}], flags: { pf2e: { modifiers: [{ slug: "hero-bonus-points" }] } } }), true);
 });
 
+test("personal best Influence discoveries identify the acting PC for the table", () => {
+  const resolveDiscovery = between("async function resolveDiscovery", "function discoveryOfferState");
+  assert.match(resolveDiscovery, /\$\{participantDisplayName\(encounter, actor\)\}'s best Influence option —/);
+  assert.doesNotMatch(resolveDiscovery, /Your best Influence option/);
+});
+
 test("creative approaches and recovery controls use the shared check pipeline", () => {
   assert.match(source, /const attempts = speculativeAttemptSkills\(actor, npc, knownSkills\);/);
   assert.match(source, /function starshipProposalChoices\(actor, activity\)/);

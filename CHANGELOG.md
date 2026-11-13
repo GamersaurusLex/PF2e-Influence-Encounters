@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.26 — 2026-11-13
+
+- Player-specific **My Best Influence Option** discoveries now identify the character whose statistics produced the recommendation, such as **Felix's best Influence option — Diplomacy**.
+
 ## 0.8.25 — 2026-11-13
 
 - GM approval now immediately triggers the approved PF2e check on the acting player's own Foundry client. The roll remains player-authored, preserving Hero Point, Rewrite Fate, and Bonus Die controls on its normal chat card.

@@ -5595,7 +5595,7 @@ async function resolveDiscovery(encounterId, userId, selections, logEntryId) {
     if (choice === "my-best") {
       const best = bestInfluenceSkillsForActor(actor, npc);
       if (!best.length) continue;
-      fact = `Your best Influence option — ${best.map((skill) => skill.label).join(" or ")}.`;
+      fact = `${participantDisplayName(encounter, actor)}'s best Influence option — ${best.map((skill) => skill.label).join(" or ")}.`;
       reveals.bestByActor[actor.id] = true;
     }
     if (choice === "party-lore") {
