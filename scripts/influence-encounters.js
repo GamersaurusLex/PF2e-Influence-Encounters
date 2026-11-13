@@ -4817,6 +4817,7 @@ async function receivePlayerRoll(payload) {
   request.status = "awaiting-final-result";
   request.playerRoll = { total, degree, messageId: payload.messageId ?? request.playerRoll?.messageId ?? "", recordedAt: Date.now() };
   await Store.save(encounter);
+  if (payload.autoSubmit) return resolveSubmittedPlayerRoll({ encounterId: encounter.id, requestId: request.id, userId: request.requesterId });
   game.socket.emit(SOCKET, { action: "refresh" });
   tracker?.render({ force: true });
 }
@@ -5907,7 +5908,12 @@ function pendingCheckIdFromMessage(message) {
     ?? "";
 }
 
-async function trackPlayerRollMessage(message, requestId) {
+function hasFortuneReplacement(message) {
+  if ((message?.rolls?.length ?? 0) > 1) return true;
+  return (message?.flags?.pf2e?.modifiers ?? []).some((modifier) => modifier?.slug === "hero-bonus-points");
+}
+
+async function trackPlayerRollMessage(message, requestId, { autoSubmit = false } = {}) {
   if (!requestId || chatMessageAuthorId(message) !== game.user.id) return;
   if (message.getFlag(MODULE_ID, "pendingCheckId") !== requestId) await message.setFlag(MODULE_ID, "pendingCheckId", requestId);
   // PF2e keeps a Hero Point reroll on the original card and appends the
@@ -5924,7 +5930,7 @@ async function trackPlayerRollMessage(message, requestId) {
   ) ?? null;
   const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
   if (!request || request.requesterId !== game.user.id) return;
-  reportPlayerRoll({ encounterId: encounter.id, requestId, userId: game.user.id, total, degree, messageId: message.id });
+  reportPlayerRoll({ encounterId: encounter.id, requestId, userId: game.user.id, total, degree, messageId: message.id, autoSubmit: autoSubmit && request.status === "awaiting-final-result" });
 }
 
 Hooks.on("preDeleteChatMessage", (message) => {
@@ -5940,13 +5946,13 @@ Hooks.on("createChatMessage", (message) => {
     || (rollMessageOptions(message).includes("check:reroll") ? pendingRerollRequests.get(actorId) : "");
   if (!requestId) return;
   pendingRerollRequests.delete(actorId);
-  trackPlayerRollMessage(message, requestId);
+  trackPlayerRollMessage(message, requestId, { autoSubmit: rollMessageOptions(message).includes("check:reroll") });
 });
 
-Hooks.on("updateChatMessage", (message) => {
+Hooks.on("updateChatMessage", (message, changed) => {
   if (chatMessageAuthorId(message) !== game.user.id) return;
   const requestId = pendingCheckIdFromMessage(message);
-  if (requestId) trackPlayerRollMessage(message, requestId);
+  if (requestId) trackPlayerRollMessage(message, requestId, { autoSubmit: !!changed.rolls && hasFortuneReplacement(message) });
 });
 
 Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); });

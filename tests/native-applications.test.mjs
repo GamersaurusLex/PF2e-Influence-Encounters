@@ -80,7 +80,7 @@ test("player roll actions stay above the scrollable encounter detail", async () 
   assert.match(css, /\.influence-tracker\.player-view \.encounter-header/);
 });
 
-test("approved player rolls use PF2e's native visible-or-blind card and preserve reroll tracking", () => {
+test("approved player rolls use PF2e's native visible-or-blind card and preserve reroll tracking", async () => {
   const approvedRoll = between("async function openApprovedPlayerRoll", "function reportPlayerRoll");
   assert.match(approvedRoll, /messageMode:\s*request\.type === ["']discovery["'] \? ["']blind["'] : ["']public["']/);
   assert.match(approvedRoll, /skipDialog:\s*true/);
@@ -90,6 +90,18 @@ test("approved player rolls use PF2e's native visible-or-blind card and preserve
   assert.match(source, /Hooks\.on\(["']preDeleteChatMessage["']/);
   assert.match(source, /Hooks\.on\(["']updateChatMessage["']/);
   assert.match(source, /check:reroll/);
+  assert.match(source, /autoSubmit: autoSubmit && request\.status === "awaiting-final-result"/);
+  assert.match(source, /payload\.autoSubmit\) return resolveSubmittedPlayerRoll/);
+  const trackerTemplate = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
+  assert.match(trackerTemplate, /Keep this result, or use one Fortune effect from the chat card/);
+  assert.match(trackerTemplate, /> Keep Result</);
+});
+
+test("only actual Fortune replacements auto-submit an approved player roll", () => {
+  const hasFortuneReplacement = new Function(`${between("function hasFortuneReplacement", "async function trackPlayerRollMessage")}\nreturn hasFortuneReplacement;`)();
+  assert.equal(hasFortuneReplacement({ rolls: [{}], flags: { pf2e: { modifiers: [] } } }), false);
+  assert.equal(hasFortuneReplacement({ rolls: [{}, {}], flags: { pf2e: { modifiers: [] } } }), true);
+  assert.equal(hasFortuneReplacement({ rolls: [{}], flags: { pf2e: { modifiers: [{ slug: "hero-bonus-points" }] } } }), true);
 });
 
 test("creative approaches and recovery controls use the shared check pipeline", () => {

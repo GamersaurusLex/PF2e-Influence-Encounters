@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.24 — 2026-11-13
+
+- Rebuilt the GM **Pending Checks** controls into resolution and cleanup groups so every button remains inside the request row. **Forget** is now **Clear Stuck Request**; canceling still sends the player a cancellation card.
+- Replaced **Submit Final Result** with **Keep Result** and clear Fortune-effect guidance. A Hero Point, Rewrite Fate, or Bonus Die replacement automatically finalizes the approved result after PF2e records the replacement roll.
+
 ## 0.8.23 — 2026-11-13
 
 - Streamlined the player-facing tracker for single-target Influence encounters while preserving the GM view. The target portrait and name now serve as the header, the redundant target card and participant roster are removed, and a player who controls one participating PC is selected automatically.
