@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.23 — 2026-11-13
+
+- Streamlined the player-facing tracker for single-target Influence encounters while preserving the GM view. The target portrait and name now serve as the header, the redundant target card and participant roster are removed, and a player who controls one participating PC is selected automatically.
+- Moved **Discovery Check** and **Influence Check** controls directly below the header, so they remain immediately visible instead of being buried beneath encounter detail. Optional target appearance is now a compact disclosure.
+
 ## 0.8.22 — 2026-11-12
 
 - Preserved player-owned PF2e Hero Point rerolls across every automated encounter type: Influence, Discovery, Research, Chase, Skill, Infiltration, and Starship. An approved player roll remains pending until the player submits its final result, and a Hero Point reroll updates that pending result.

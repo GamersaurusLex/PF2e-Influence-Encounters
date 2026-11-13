@@ -2181,9 +2181,14 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       boons: threshold.boons.filter((boon) => game.user.isGM || boon.playerVisible)
     }));
     const knownDiscoveries = (encounter?.discoveries?.[game.user.id]?.npcs?.[activeNpc?.id]?.facts ?? []).map(concealDiscoveryDC);
+    const selectedActor = participants.find((actor) => actor.id === selection.actorId) ?? null;
     const manualMode = !game.user.isGM && manualEncounterMode(encounter);
     const manualInfluence = manualMode && encounter?.subsystemType === "influence";
-    const selectedActor = participants.find((actor) => actor.id === selection.actorId) ?? null;
+    const playerSingleInfluence = !game.user.isGM && encounter?.subsystemType === "influence" && visibleNpcs.length === 1;
+    const showParticipantRoster = !playerSingleInfluence;
+    const showParticipantSelector = !!controlledActors.length && (!playerSingleInfluence || controlledActors.length > 1);
+    const showTargetSelector = !playerSingleInfluence;
+    const showNoControlledActors = !controlledActors.length;
     const knownInfluenceSkills = manualInfluence && selectedActor && activeNpcRecord
       ? knownConfiguredSkills(selectedActor, activeNpcRecord.influence, activeNpcRecord, "known").map((skill) => skill.label)
       : [];
@@ -2222,7 +2227,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
         : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
     const infiltrationObjectiveView = selectedInfiltrationObjective ? { ...selectedInfiltrationObjective, name: selectedInfiltrationObjective.name, obstacleCount: infiltrationObstacles(encounter, selectedInfiltrationObjective.id).length } : null;
     const edgePoints = isInfiltration ? { party: Number(encounter.infiltration.edgePoints.party) || 0, personal: Math.max(0, Number(encounter.infiltration.edgePoints.byActor?.[selection.actorId]) || 0) } : null;
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, manualInfluence, checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints,
+    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, manualInfluence, playerSingleInfluence, showParticipantRoster, showParticipantSelector, showTargetSelector, showNoControlledActors, selectedActorName: selectedActor ? participantDisplayName(encounter, selectedActor) : "", checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints,
       researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
       pointLabel: isResearch ? "RP" : isChase ? "CP" : isSkill ? "SP" : isInfiltration ? "IP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : isSkill ? "Skill Challenges" : isInfiltration ? "Infiltration Obstacles" : "Influence Targets",
       actionLabel: isResearch ? "Research" : (isChase || isSkill || isInfiltration) ? "Make a Check" : "Influence", currentPoints,
