@@ -41,7 +41,7 @@ test("every tracker and manager template action is registered with native dispat
   }
 });
 
-test("approved checks expose deliberate player roll and final-submit states", () => {
+test("approved checks expose an automatic player roll and final-submit state", () => {
   const checks = new Function(
     "game", "participantDisplayName", "starshipShip", "starshipActivityFor", "targetDisplayName", "PLAYER_ROLL_STATES",
     `${between("function playerRollChecks", "function starshipTrackerContext")}
@@ -84,6 +84,9 @@ test("approved player rolls use PF2e's native visible-or-blind card and preserve
   const approvedRoll = between("async function openApprovedPlayerRoll", "function reportPlayerRoll");
   assert.match(approvedRoll, /messageMode:\s*request\.type === ["']discovery["'] \? ["']blind["'] : ["']public["']/);
   assert.match(approvedRoll, /skipDialog:\s*true/);
+  assert.match(approvedRoll, /approvedPlayerRollsInFlight/);
+  assert.match(approvedRoll, /approvedPlayerRollRequest\(payload\)/);
+  assert.match(source, /openApprovedPlayerRoll\(payload\)\.catch/);
   const rerollTracking = between("async function trackPlayerRollMessage", "Hooks.on(\"preDeleteChatMessage\"");
   assert.match(rerollTracking, /Object\.values\(Store\.all\(\)\)/);
   assert.match(rerollTracking, /message\.rolls\?\.at\(-1\)/);
@@ -95,6 +98,7 @@ test("approved player rolls use PF2e's native visible-or-blind card and preserve
   const trackerTemplate = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
   assert.match(trackerTemplate, /Keep this result, or use one Fortune effect from the chat card/);
   assert.match(trackerTemplate, /> Keep Result</);
+  assert.match(trackerTemplate, /Approved: rolling \{\{skillLabel\}\}…/);
 });
 
 test("only actual Fortune replacements auto-submit an approved player roll", () => {

@@ -4733,8 +4733,13 @@ async function approvePlayerCheck(encounter, request, actor, approval, { notifyP
   savedRequest.approvedAt = Date.now();
   await Store.save(savedEncounter);
   const payload = { action: "player-roll-approved", encounterId: savedEncounter.id, requestId: savedRequest.id, userId: savedRequest.requesterId };
-  if (notifyPlayer && savedRequest.requesterId === game.user.id) ui.notifications.info("Check approved. Roll it when ready.");
-  else game.socket.emit(SOCKET, payload);
+  // The GM's approval is the player's confirmation point. Ask the owning
+  // player's client to create the native PF2e roll immediately so it remains
+  // a player-authored chat card with normal Fortune-effect controls.
+  if (notifyPlayer && savedRequest.requesterId === game.user.id) {
+    ui.notifications.info("Check approved. Rolling it now.");
+    await openApprovedPlayerRoll(payload);
+  } else if (notifyPlayer) game.socket.emit(SOCKET, payload);
   game.socket.emit(SOCKET, { action: "refresh" });
   tracker?.render({ force: true });
 }
@@ -4770,36 +4775,55 @@ function approvedRollModifiers(request) {
     }));
 }
 
+const approvedPlayerRollsInFlight = new Set();
+
+async function approvedPlayerRollRequest(payload, attempts = 3) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const encounter = Store.get(payload.encounterId);
+    const request = encounter?.pendingChecks?.find((entry) => entry.id === payload.requestId);
+    if (encounter && request?.status === "awaiting-player-roll") return { encounter, request };
+    if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return null;
+}
+
 async function openApprovedPlayerRoll(payload) {
   if (payload.userId !== game.user.id) return;
-  const encounter = Store.get(payload.encounterId);
-  const request = encounter?.pendingChecks?.find((entry) => entry.id === payload.requestId);
-  if (!encounter || request?.status !== "awaiting-player-roll") return;
+  const rollKey = `${payload.encounterId}:${payload.requestId}`;
+  if (approvedPlayerRollsInFlight.has(rollKey)) return;
+  const approved = await approvedPlayerRollRequest(payload);
+  if (!approved) return;
+  const { encounter, request } = approved;
+  approvedPlayerRollsInFlight.add(rollKey);
   const actor = game.actors.get(request.actorId);
   const statistic = approvedCheckStatistic(actor, request);
-  if (!actor || !statistic?.roll) return ui.notifications.error(`${actor?.name ?? "That PC"} no longer has a rollable ${request.approval?.skill?.label ?? "statistic"}.`);
-  const approval = request.approval;
-  const roll = await statistic.roll.call(statistic, {
-    dc: { value: Number(approval.effectiveDC), visible: false, label: `${encounter.name}: ${approval.skill.label}` },
-    modifiers: approvedRollModifiers(request),
-    extraRollOptions: [`influence:type:${request.type}`, `influence:encounter:${encounter.id}`, `influence:pending:${request.id}`],
-    label: request.type === "starship" ? `${approval.role?.label ?? "Crew"}: ${approval.activity?.label ?? approval.skill.label}` : `${request.type.titleCase()}: ${targetDisplayName(encounter.npcs.find((npc) => npc.id === request.npcId))}`,
-    // The roll belongs to the player so PF2e's native Hero Point reroll is
-    // available. Influence, Chase, Research, Skill, and Starship checks are
-    // public; Discovery remains GM blind. The module's sanitized result card
-    // still controls whether a DC or success margin is disclosed.
-    messageMode: request.type === "discovery" ? "blind" : "public",
-    skipDialog: true,
-    createMessage: true
-  });
-  if (!roll) return;
-  reportPlayerRoll({
-    encounterId: encounter.id,
-    requestId: request.id,
-    userId: game.user.id,
-    total: Number(roll.total),
-    degree: Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess)
-  });
+  try {
+    if (!actor || !statistic?.roll) return ui.notifications.error(`${actor?.name ?? "That PC"} no longer has a rollable ${request.approval?.skill?.label ?? "statistic"}.`);
+    const approval = request.approval;
+    const roll = await statistic.roll.call(statistic, {
+      dc: { value: Number(approval.effectiveDC), visible: false, label: `${encounter.name}: ${approval.skill.label}` },
+      modifiers: approvedRollModifiers(request),
+      extraRollOptions: [`influence:type:${request.type}`, `influence:encounter:${encounter.id}`, `influence:pending:${request.id}`],
+      label: request.type === "starship" ? `${approval.role?.label ?? "Crew"}: ${approval.activity?.label ?? approval.skill.label}` : `${request.type.titleCase()}: ${targetDisplayName(encounter.npcs.find((npc) => npc.id === request.npcId))}`,
+      // The roll belongs to the player so PF2e's native Hero Point reroll is
+      // available. Influence, Chase, Research, Skill, and Starship checks are
+      // public; Discovery remains GM blind. The module's sanitized result card
+      // still controls whether a DC or success margin is disclosed.
+      messageMode: request.type === "discovery" ? "blind" : "public",
+      skipDialog: true,
+      createMessage: true
+    });
+    if (!roll) return;
+    reportPlayerRoll({
+      encounterId: encounter.id,
+      requestId: request.id,
+      userId: game.user.id,
+      total: Number(roll.total),
+      degree: Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess)
+    });
+  } finally {
+    approvedPlayerRollsInFlight.delete(rollKey);
+  }
 }
 
 function reportPlayerRoll(payload) {
@@ -5849,7 +5873,8 @@ Hooks.once("ready", async () => {
   game.socket.on(SOCKET, (payload) => {
     if (payload.action === "check-request" && game.user.isGM && game.users.activeGM?.id === game.user.id) receiveCheckRequest(payload);
     if (payload.action === "player-roll-approved" && payload.userId === game.user.id) {
-      ui.notifications.info("Your check was approved. Roll it when ready.");
+      ui.notifications.info("Your check was approved. Rolling it now.");
+      openApprovedPlayerRoll(payload).catch((error) => console.error(`${MODULE_ID} | Could not roll approved check`, error));
       refreshTrackerForEncounterState();
     }
     if (payload.action === "player-roll-recorded" && game.user.isGM && game.users.activeGM?.id === game.user.id) receivePlayerRoll(payload);

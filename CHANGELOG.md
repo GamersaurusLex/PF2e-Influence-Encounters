@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.25 — 2026-11-13
+
+- GM approval now immediately triggers the approved PF2e check on the acting player's own Foundry client. The roll remains player-authored, preserving Hero Point, Rewrite Fate, and Bonus Die controls on its normal chat card.
+- Removed the redundant player-facing **Roll [Skill]** button from every automated encounter tracker. The action dock now reports that the approved roll is underway, then offers **Keep Result** or the Fortune-effect path.
+
 ## 0.8.24 — 2026-11-13
 
 - Rebuilt the GM **Pending Checks** controls into resolution and cleanup groups so every button remains inside the request row. **Forget** is now **Clear Stuck Request**; canceling still sends the player a cancellation card.
