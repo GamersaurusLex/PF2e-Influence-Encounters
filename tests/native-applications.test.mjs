@@ -80,6 +80,44 @@ test("player roll actions stay above the scrollable encounter detail", async () 
   assert.match(css, /\.influence-tracker\.player-view \.encounter-header/);
 });
 
+test("player controls lead encounter content and undo is limited to resolved checks", async () => {
+  const trackerTemplate = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
+  assert.ok(trackerTemplate.indexOf('class="player-primary-actions"') < trackerTemplate.indexOf('class="npc-status-list"'),
+    "players reach their action controls before target and encounter detail");
+  assert.match(trackerTemplate, /Undo Last Check/);
+  assert.match(source, /function isCheckSnapshot\(entry\)/);
+  assert.match(source, /reverse\(\)\.find\(isCheckSnapshot\)/);
+  assert.match(source, /function restoreLastCheck\(encounter, entry\)/);
+  assert.match(source, /kind: "check"/);
+});
+
+test("Infiltration hides future obstacles while keeping completed and current obstacles visible to players", async () => {
+  const visibility = new Function(
+    `${between("function infiltrationProgress", "function infiltrationActorObjective")}
+return { infiltrationObstacleComplete, infiltrationObstacleVisibleToPlayer, advanceInfiltrationObstacle };`
+  )();
+  const encounter = {
+    activeNpcId: "current",
+    infiltration: { hideFutureObstacles: true },
+    npcs: [
+      { id: "completed", points: 2, maximumPoints: 2, infiltrationScope: "group" },
+      { id: "current", points: 0, maximumPoints: 2, infiltrationScope: "group" },
+      { id: "future", points: 0, maximumPoints: 2, infiltrationScope: "group" }
+    ]
+  };
+  assert.equal(visibility.infiltrationObstacleVisibleToPlayer(encounter, encounter.npcs[0]), true);
+  assert.equal(visibility.infiltrationObstacleVisibleToPlayer(encounter, encounter.npcs[1]), true);
+  assert.equal(visibility.infiltrationObstacleVisibleToPlayer(encounter, encounter.npcs[2]), false);
+  encounter.npcs[1].points = 2;
+  visibility.advanceInfiltrationObstacle(encounter, "", "current");
+  assert.equal(encounter.activeNpcId, "future", "completion advances the revealed obstacle");
+  encounter.infiltration.hideFutureObstacles = false;
+  assert.equal(visibility.infiltrationObstacleVisibleToPlayer(encounter, encounter.npcs[2]), true);
+  const editor = await readFile(new URL("../templates/editor.hbs", import.meta.url), "utf8");
+  assert.match(editor, /name="infiltration\.hideFutureObstacles"/);
+  assert.match(source, /infiltration\.hideFutureObstacles = infiltration\.hideFutureObstacles !== false/);
+});
+
 test("approved player rolls use PF2e's native visible-or-blind card and preserve reroll tracking", async () => {
   const approvedRoll = between("async function openApprovedPlayerRoll", "function reportPlayerRoll");
   assert.match(approvedRoll, /messageMode:\s*request\.type === ["']discovery["'] \? ["']blind["'] : ["']public["']/);

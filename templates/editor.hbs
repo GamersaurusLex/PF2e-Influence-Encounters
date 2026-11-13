@@ -9,11 +9,15 @@
         <div class="form-group"><label>Encounter Image</label><div class="form-fields"><file-picker type="image" name="image" value="{{encounter.image}}"></file-picker></div></div>
         <div class="form-group"><label>Cinematic Background</label><div class="form-fields"><file-picker type="image" name="backgroundImage" value="{{encounter.backgroundImage}}"></file-picker></div></div>
         <div class="form-group"><label>Canvas Blur</label><div class="form-fields"><input type="number" min="0" max="20" name="backgroundBlur" value="{{encounter.backgroundBlur}}"></div></div>
+        <label>Player-Facing Situation &amp; Stakes<textarea name="playerDescription" placeholder="What every player should know about the situation before acting.">{{encounter.playerDescription}}</textarea></label>
+        <p class="hint">This appears in a collapsible panel on player encounter windows. Target Background and Personality remain GM-only.</p>
         {{#if isInfiltration}}
         <fieldset class="infiltration-settings"><legend>Infiltration Structure</legend>
           <p class="hint">Awareness is a shared party track. Edge Points are spent by the GM to turn a failed obstacle or complication check into a success.</p>
           <div class="trait-grid"><label>Awareness Points<input type="number" min="0" name="infiltration.awareness.points" value="{{encounter.infiltration.awareness.points}}"></label><label>Awareness Limit<input type="number" min="1" name="infiltration.awareness.maximum" value="{{encounter.infiltration.awareness.maximum}}"></label><label>AP at End of Round<input type="number" min="0" name="infiltration.awareness.endRoundIncrease" value="{{encounter.infiltration.awareness.endRoundIncrease}}"></label><label>Party Edge Points<input type="number" min="0" name="infiltration.edgePoints.party" value="{{encounter.infiltration.edgePoints.party}}"></label></div>
           <div class="form-group"><label class="checkbox"><input type="checkbox" name="infiltration.advanceWorldTime" {{checked encounter.infiltration.advanceWorldTime}}> Advance World Clock after each round</label><div class="form-fields"><input type="number" min="1" name="infiltration.roundDurationMinutes" value="{{encounter.infiltration.roundDurationMinutes}}"><span class="units">minutes</span></div></div>
+          <div class="form-group"><label class="checkbox"><input type="checkbox" name="infiltration.hideFutureObstacles" {{checked encounter.infiltration.hideFutureObstacles}}> Hide future obstacles from players</label></div>
+          <p class="hint">Players can review completed obstacles and the current obstacle. The GM always sees the complete infiltration.</p>
           {{#if progressClockAvailable}}<div class="form-group"><label class="checkbox"><input type="checkbox" name="infiltration.awareness.clock.enabled" {{checked encounter.infiltration.awareness.clock.enabled}}> Show Awareness as a Global Progress Clock</label></div>{{/if}}
         </fieldset>
         <fieldset class="infiltration-objectives"><legend>Objectives</legend>

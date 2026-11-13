@@ -51,6 +51,7 @@ function defaultInfiltrationData() {
       clock: { enabled: false, clockId: "" }
     },
     edgePoints: { party: 0, byActor: {} },
+    hideFutureObstacles: true,
     objectives: [{ id: randomID(), name: "Entry", description: "", image: "", visibleToPlayers: false, completionMode: "all", requiredObstacleCount: 1 }],
     complications: [],
     advanceWorldTime: false,
@@ -84,6 +85,18 @@ function infiltrationObjectiveComplete(encounter, objective, actorId = "") {
   return objective?.completionMode === "count"
     ? completed >= Math.max(1, Number(objective.requiredObstacleCount) || 1)
     : completed >= obstacles.length;
+}
+
+function infiltrationObstacleVisibleToPlayer(encounter, obstacle, actorId = "") {
+  if (!encounter?.infiltration?.hideFutureObstacles) return true;
+  return obstacle.id === encounter.activeNpcId || infiltrationObstacleComplete(obstacle, actorId);
+}
+
+function advanceInfiltrationObstacle(encounter, actorId, completedObstacleId) {
+  const completed = encounter?.npcs?.find((obstacle) => obstacle.id === completedObstacleId);
+  if (!completed || completed.infiltrationScope === "individual" || encounter.activeNpcId !== completedObstacleId) return;
+  const next = encounter.npcs.find((obstacle) => obstacle.id !== completedObstacleId && !infiltrationObstacleComplete(obstacle, actorId));
+  if (next) encounter.activeNpcId = next.id;
 }
 
 function infiltrationActorObjective(encounter, actorId) {
@@ -498,9 +511,9 @@ function starshipTrackerContext(encounter) {
     checkLog: [...(encounter.checkLog ?? [])].reverse().map((entry) => ({ ...entry,
       typeLabel: entry.type === "starship" ? "Crew Action" : entry.type,
       displayOutcome: entry.outcome,
-      canCorrectOutcome: game.user.isGM && entry.correctionSnapshotId === encounter.history?.at(-1)?.id
+      canCorrectOutcome: game.user.isGM && entry.correctionSnapshotId === [...(encounter.history ?? [])].findLast(isCheckSnapshot)?.id
     })),
-    controlledActors, selectedActor, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, playerRollChecks: manualMode ? [] : playerRollChecks(encounter), tableSpotlight, finished, manualMode, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
+    controlledActors, selectedActor, showParticipantSelector: game.user.isGM ? !!controlledActors.length : controlledActors.length > 1, roleEntries, activities, selectedRole, selectedActionId, selectedSkillSlug, roleSelectionComplete, pendingChecks, playerRollChecks: manualMode ? [] : playerRollChecks(encounter), tableSpotlight, finished, manualMode, roleSelectionStage: starship.stage === "role-selection", actionStage: starship.stage === "actions",
     canClaimRole: encounter.status === "active" && starship.stage === "role-selection" && !!selectedActor,
     canStartStarshipRound: game.user.isGM && encounter.status === "active" && starship.stage === "role-selection" && !finished,
     canTakeStarshipAction: encounter.status === "active" && starship.stage === "actions" && !!selectedActor && !!selectedRole && !!selectedActionId && !!selectedSkillSlug && !encounter.actorsActed?.[selectedActor.id] && !finished,
@@ -794,6 +807,7 @@ function normalizeEncounterCollections(encounter) {
     infiltration.awareness.clock = foundry.utils.mergeObject({ enabled: false, clockId: "" }, infiltration.awareness.clock ?? {}, { inplace: false, overwrite: true });
     infiltration.edgePoints = foundry.utils.mergeObject({ party: 0, byActor: {} }, infiltration.edgePoints ?? {}, { inplace: false, overwrite: true });
     infiltration.edgePoints.party = Math.max(0, Number(infiltration.edgePoints.party) || 0);
+    infiltration.hideFutureObstacles = infiltration.hideFutureObstacles !== false;
     infiltration.edgePoints.byActor = infiltration.edgePoints.byActor && typeof infiltration.edgePoints.byActor === "object" ? infiltration.edgePoints.byActor : {};
     for (const [actorId, points] of Object.entries(infiltration.edgePoints.byActor)) infiltration.edgePoints.byActor[actorId] = Math.max(0, Number(points) || 0);
     infiltration.objectives = indexedArray(infiltration.objectives).map((objective, index) => ({
@@ -852,6 +866,9 @@ function normalizeEncounterCollections(encounter) {
   encounter.skillWinnerActorId ??= "";
   encounter.skillOutcome = ["victory", "failure"].includes(encounter.skillOutcome) ? encounter.skillOutcome : "";
   encounter.skillDescription ??= "";
+  // This is the encounter-level briefing players can consult without exposing
+  // target-only GM notes such as Background and Personality.
+  encounter.playerDescription ??= "";
   encounter.chaseDescription ??= "";
   encounter.chaseSubject = foundry.utils.mergeObject({ name: "Chase Objective", nickname: "", image: "icons/svg/mystery-man.svg", label: "Quarry", actorId: "" }, encounter.chaseSubject ?? {}, { inplace: false, overwrite: true });
   encounter.researchPoints = Math.max(0, Number(encounter.researchPoints) || 0);
@@ -1030,6 +1047,7 @@ const DEFAULT_ENCOUNTER = {
   skillWinnerActorId: "",
   skillOutcome: "",
   skillDescription: "",
+  playerDescription: "",
   infiltration: null,
   starship: null,
   researchThresholds: [],
@@ -1754,14 +1772,73 @@ async function syncEncounterJournal(encounter) {
   }
 }
 
-function snapshot(encounter, label) {
+function snapshotState(encounter) {
   const copy = deepClone(encounter);
   copy.history = [];
+  return copy;
+}
+
+function snapshot(encounter, label, { kind = "state" } = {}) {
   encounter.history ??= [];
-  const entry = { id: randomID(), at: Date.now(), label, state: copy };
+  const entry = { id: randomID(), at: Date.now(), label, kind, state: snapshotState(encounter) };
   encounter.history.push(entry);
   if (encounter.history.length > 50) encounter.history.shift();
   return entry;
+}
+
+function isCheckSnapshot(entry) {
+  return entry?.kind === "check";
+}
+
+function sameEncounterValue(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function reconcileCheckValue(current, before, after) {
+  if (sameEncounterValue(before, after)) return deepClone(current);
+  const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+  if (Array.isArray(before) && Array.isArray(after) && Array.isArray(current) && before.length === after.length && after.length === current.length) {
+    return current.map((value, index) => reconcileCheckValue(value, before[index], after[index]));
+  }
+  if (isObject(before) && isObject(after) && isObject(current)) {
+    const result = {};
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after), ...Object.keys(current)])) {
+      const beforeHasKey = Object.hasOwn(before, key);
+      const afterHasKey = Object.hasOwn(after, key);
+      const currentHasKey = Object.hasOwn(current, key);
+      if (!beforeHasKey && afterHasKey) {
+        if (!sameEncounterValue(current[key], after[key])) result[key] = deepClone(current[key]);
+      } else if (beforeHasKey && !afterHasKey) {
+        result[key] = currentHasKey ? deepClone(current[key]) : deepClone(before[key]);
+      } else result[key] = reconcileCheckValue(current[key], before[key], after[key]);
+    }
+    return result;
+  }
+  return sameEncounterValue(current, after) ? deepClone(before) : deepClone(current);
+}
+
+function finishCheckSnapshot(encounter, entry) {
+  entry.afterState = snapshotState(encounter);
+}
+
+function restoreLastCheck(encounter, entry) {
+  // Restore only the runtime state a resolved check can change.  Lifecycle and
+  // editor data stay put, so Undo Last Check cannot reopen, pause, or rewrite
+  // an encounter after the fact.
+  const state = entry?.state;
+  if (!state) return false;
+  const runtimeFields = [
+    "npcs", "activeNpcId", "actorsActed", "pendingChecks", "pendingDiscoveries",
+    "checkLog", "activeEffects", "researchPoints", "skillPoints", "skillPointsByActor",
+    "skillWinnerActorId", "skillOutcome", "chaseOutcome", "infiltration", "starship"
+  ];
+  for (const field of runtimeFields) if (Object.hasOwn(state, field)) {
+    encounter[field] = entry.afterState && Object.hasOwn(entry.afterState, field)
+      ? reconcileCheckValue(encounter[field], state[field], entry.afterState[field])
+      : deepClone(state[field]);
+  }
+  encounter.history = (encounter.history ?? []).filter((candidate) => candidate.id !== entry.id);
+  return true;
 }
 
 function balancedChasePoints(basePoints, participantCount, designedPartySize) {
@@ -2160,8 +2237,11 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     const activeObstacleIndex = isChase ? Math.max(0, encounter.npcs.findIndex((npc) => npc.id === encounter.activeNpcId)) : -1;
     const obscureChaseCourse = isChase && encounter.obscureFutureObstacles && !game.user.isGM;
     const selectedInfiltrationObjective = isInfiltration ? infiltrationActorObjective(encounter, selection.actorId) : null;
-    const visibleNpcs = (encounter?.npcs ?? []).filter((npc, index) => npc.availability !== "hidden" && (!obscureChaseCourse || index <= activeObstacleIndex) && (!isInfiltration || game.user.isGM || (selectedInfiltrationObjective && npc.infiltrationObjectiveId === selectedInfiltrationObjective.id && selectedInfiltrationObjective.visibleToPlayers)));
-    const activeNpcRecord = visibleNpcs.find((npc) => npc.id === selection.npcId) ?? visibleNpcs[0] ?? null;
+    const visibleNpcs = (encounter?.npcs ?? []).filter((npc, index) => npc.availability !== "hidden" && (!obscureChaseCourse || index <= activeObstacleIndex) && (!isInfiltration || game.user.isGM || (selectedInfiltrationObjective && npc.infiltrationObjectiveId === selectedInfiltrationObjective.id && selectedInfiltrationObjective.visibleToPlayers && infiltrationObstacleVisibleToPlayer(encounter, npc, selection.actorId))));
+    const activeNpcRecord = visibleNpcs.find((npc) => npc.id === selection.npcId)
+      ?? visibleNpcs.find((npc) => npc.id === encounter.activeNpcId)
+      ?? visibleNpcs[0]
+      ?? null;
     const selectedResearchActor = isResearch ? participants.find((actor) => actor.id === selection.actorId) : null;
     const activeResearchState = isResearch && activeNpcRecord && selection.actorId ? researchActorState(activeNpcRecord, selection.actorId) : null;
     const activeNpc = activeNpcRecord ? { ...activeNpcRecord, name: targetDisplayName(activeNpcRecord), researchActorState: activeResearchState } : isInfiltration ? { id: "", name: selectedInfiltrationObjective?.name || "Infiltration", image: encounter.image, background: selectedInfiltrationObjective?.description || "", influence: [], requirements: "" } : null;
@@ -2184,9 +2264,12 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     const selectedActor = participants.find((actor) => actor.id === selection.actorId) ?? null;
     const manualMode = !game.user.isGM && manualEncounterMode(encounter);
     const manualInfluence = manualMode && encounter?.subsystemType === "influence";
+    const playerDescription = String(encounter?.playerDescription || (isChase ? encounter?.chaseDescription : isSkill ? encounter?.skillDescription : "") || "").trim();
     const playerSingleInfluence = !game.user.isGM && encounter?.subsystemType === "influence" && visibleNpcs.length === 1;
     const showParticipantRoster = !playerSingleInfluence;
-    const showParticipantSelector = !!controlledActors.length && (!playerSingleInfluence || controlledActors.length > 1);
+    const showParticipantSelector = game.user.isGM
+      ? !!controlledActors.length
+      : controlledActors.length > 1;
     const showTargetSelector = !playerSingleInfluence;
     const showNoControlledActors = !controlledActors.length;
     const knownInfluenceSkills = manualInfluence && selectedActor && activeNpcRecord
@@ -2196,7 +2279,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     const checkLog = [...(encounter?.checkLog ?? [])].reverse().map((entry) => ({ ...entry,
       typeLabel: entry.type === "research" ? "Research" : entry.type === "chase" ? "Chase" : entry.type === "infiltration" ? "Infiltration" : entry.type === "skill" ? "Skill" : entry.type === "discovery" ? "Discovery" : "Influence",
       pendingDiscovery: pendingByLog.get(entry.id),
-      canCorrectOutcome: game.user.isGM && entry.correctionSnapshotId === encounter.history?.at(-1)?.id,
+      canCorrectOutcome: game.user.isGM && entry.correctionSnapshotId === [...(encounter.history ?? [])].findLast(isCheckSnapshot)?.id,
       details: !showInfluenceRewards && entry.type === "influence" ? [] : entry.type === "discovery" ? (entry.details ?? []).map(concealDiscoveryDC) : (entry.details ?? []),
       displayOutcome: !game.user.isGM && (entry.type === "discovery" || entry.outcome.includes("Invalid Influence Skill"))
         ? (entry.outcome.includes("Invalid") ? "Failure" : entry.outcome.startsWith("Critical Success") ? "Critical Success" : entry.outcome.startsWith("Success") ? "Success" : "Failure")
@@ -2223,11 +2306,11 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     const sourceAvailable = isChase
       ? activeNpc?.availability !== "exhausted"
       : isInfiltration
-        ? !!activeNpcRecord && !activeNpcRecord.infiltrationNarrativeOnly && (!activeNpcRecord.infiltrationAssignedActorId || activeNpcRecord.infiltrationAssignedActorId === selection.actorId)
+        ? !!activeNpcRecord && !infiltrationObstacleComplete(activeNpcRecord, selection.actorId) && !activeNpcRecord.infiltrationNarrativeOnly && (!activeNpcRecord.infiltrationAssignedActorId || activeNpcRecord.infiltrationAssignedActorId === selection.actorId)
         : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
     const infiltrationObjectiveView = selectedInfiltrationObjective ? { ...selectedInfiltrationObjective, name: selectedInfiltrationObjective.name, obstacleCount: infiltrationObstacles(encounter, selectedInfiltrationObjective.id).length } : null;
     const edgePoints = isInfiltration ? { party: Number(encounter.infiltration.edgePoints.party) || 0, personal: Math.max(0, Number(encounter.infiltration.edgePoints.byActor?.[selection.actorId]) || 0) } : null;
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, manualInfluence, playerSingleInfluence, showParticipantRoster, showParticipantSelector, showTargetSelector, showNoControlledActors, selectedActorName: selectedActor ? participantDisplayName(encounter, selectedActor) : "", checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints,
+    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, manualInfluence, playerSingleInfluence, playerDescription, showParticipantRoster, showParticipantSelector, showTargetSelector, showNoControlledActors, selectedActorName: selectedActor ? participantDisplayName(encounter, selectedActor) : "", checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints,
       researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
       pointLabel: isResearch ? "RP" : isChase ? "CP" : isSkill ? "SP" : isInfiltration ? "IP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : isSkill ? "Skill Challenges" : isInfiltration ? "Infiltration Obstacles" : "Influence Targets",
       actionLabel: isResearch ? "Research" : (isChase || isSkill || isInfiltration) ? "Make a Check" : "Influence", currentPoints,
@@ -2370,11 +2453,10 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       encounter.influenceRewardsManuallyRevealed = true;
       announceInfluenceRewardsAfterSave = true;
     } else if (action === "undo") {
-      let entry = encounter.history.pop();
-      while (entry?.label === "undo") entry = encounter.history.pop();
-      if (!entry) return ui.notifications.info("Nothing to undo.");
-      const history = encounter.history;
-      Object.assign(encounter, deepClone(entry.state), { history });
+      const entry = [...(encounter.history ?? [])].reverse().find(isCheckSnapshot);
+      if (!entry) return ui.notifications.info("No resolved check is available to undo.");
+      restoreLastCheck(encounter, entry);
+      ui.notifications.info(`Undid the last check: ${entry.label}.`);
     } else if (action === "next-round") {
       if (encounter.subsystemType === "skill") {
         if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before ending the round.");
@@ -2878,6 +2960,7 @@ function renderInfluenceSidebarContent() {
     const research = encounter.subsystemType === "research";
     const chase = encounter.subsystemType === "chase";
     const skillEncounter = encounter.subsystemType === "skill";
+    const infiltration = encounter.subsystemType === "infiltration";
     const actors = encounterParticipants(encounter);
     const selection = encounterViewSelection(encounter);
     const actorRows = actors.map((actor) => {
@@ -2893,7 +2976,10 @@ function renderInfluenceSidebarContent() {
     const activeObstacleIndex = chase ? Math.max(0, encounter.npcs.findIndex((npc) => npc.id === encounter.activeNpcId)) : -1;
     const isBeatClock = chase && encounter.chaseType === "beat-clock";
     const obscureChaseCourse = chase && encounter.obscureFutureObstacles;
-    const visibleSources = encounter.npcs.filter((npc, index) => npc.availability !== "hidden" && (!obscureChaseCourse || index <= activeObstacleIndex));
+    const selectedInfiltrationObjective = infiltration ? infiltrationActorObjective(encounter, selection.actorId) : null;
+    const visibleSources = encounter.npcs.filter((npc, index) => npc.availability !== "hidden"
+      && (!obscureChaseCourse || index <= activeObstacleIndex)
+      && (!infiltration || (selectedInfiltrationObjective && npc.infiltrationObjectiveId === selectedInfiltrationObjective.id && selectedInfiltrationObjective.visibleToPlayers && infiltrationObstacleVisibleToPlayer(encounter, npc, selection.actorId))));
     const npcRows = visibleSources.map((npc) => {
       const subjectMarker = chase && !isBeatClock && !obscureChaseCourse && encounter.npcs.indexOf(npc) === encounter.opponentPosition ? ` <small><i class="fa-solid fa-location-dot"></i> ${esc(encounter.chaseSubject?.label || "Subject")}</small>` : "";
       const actorState = research && selection.actorId ? researchActorState(npc, selection.actorId) : null;
@@ -2901,7 +2987,9 @@ function renderInfluenceSidebarContent() {
       const sourceStatus = encounter.publicPoints ? ` <small>${npc.points}${npc.maximumPoints ? `/${npc.maximumPoints}` : ""} RP</small>` : "";
       return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${subjectMarker}${research ? `${sourceStatus}${actorStatus}` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
     }).join("");
-    const activeNpc = visibleSources.find((npc) => npc.id === selection.npcId) ?? visibleSources[0];
+    const activeNpc = visibleSources.find((npc) => npc.id === selection.npcId)
+      ?? visibleSources.find((npc) => npc.id === encounter.activeNpcId)
+      ?? visibleSources[0];
     const points = research ? encounter.researchPoints : skillEncounter && encounter.skillScoringMode === "individual" ? skillActorPoints(encounter, selection.actorId) : skillEncounter ? encounter.skillPoints : activeNpc?.points ?? 0;
     const pointLabel = research ? "RP" : chase ? "CP" : skillEncounter ? "SP" : "IP";
     const researchDisabled = research && !researchSourceAvailableForActor(activeNpc, selection.actorId) ? " disabled" : "";
@@ -4193,6 +4281,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       if (this.encounter.subsystemType === "infiltration") {
         this.encounter.infiltration.awareness.clock.enabled = this.element.querySelector('[name="infiltration.awareness.clock.enabled"]')?.checked ?? false;
         this.encounter.infiltration.advanceWorldTime = this.element.querySelector('[name="infiltration.advanceWorldTime"]')?.checked ?? false;
+        this.encounter.infiltration.hideFutureObstacles = this.element.querySelector('[name="infiltration.hideFutureObstacles"]')?.checked ?? true;
       }
       this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
       this.encounter.showResearchSkills = this.element.querySelector('[name="showResearchSkills"]')?.checked ?? this.encounter.showResearchSkills;
@@ -4691,7 +4780,7 @@ async function correctResolvedOutcome(encounterId, logEntryId) {
   const snapshotId = original?.correctionSnapshotId;
   const snapshotIndex = encounter?.history?.findIndex((entry) => entry.id === snapshotId) ?? -1;
   if (!encounter || !original || snapshotIndex < 0) return ui.notifications.warn("That check cannot be corrected because its pre-check snapshot is unavailable.");
-  if (snapshotIndex !== encounter.history.length - 1) return ui.notifications.warn("Correct Outcome is available only for the most recent encounter change. Undo later changes first.");
+  if (snapshotId !== [...(encounter.history ?? [])].findLast(isCheckSnapshot)?.id) return ui.notifications.warn("Correct Outcome is available only for the most recently resolved check.");
   const snapshotEntry = encounter.history[snapshotIndex];
   const originalOutcome = original.outcome;
   const actor = game.actors.get(original.actorId);
@@ -4702,9 +4791,7 @@ async function correctResolvedOutcome(encounterId, logEntryId) {
     hint: `Replace ${original.actorName}'s ${originalOutcome} with the selected result. The encounter will recalculate from immediately before that check.`
   });
   if (![0, 1, 2, 3].includes(degree)) return;
-  const restored = deepClone(snapshotEntry.state);
-  const history = encounter.history.slice(0, snapshotIndex);
-  Object.assign(encounter, restored, { history });
+  restoreLastCheck(encounter, snapshotEntry);
   const request = encounter.pendingChecks?.find((entry) => entry.id === original.correctionRequestId);
   if (!request?.approval) return ui.notifications.warn("The original check request could not be restored for correction.");
   const correction = { logEntryId: original.id, originalOutcome, correctedAt: Date.now() };
@@ -5151,7 +5238,7 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
   const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
   const actorName = participantDisplayName(encounter, actor);
-  const correctionSnapshot = snapshot(encounter, `${actorName}: ${activity.label}`);
+  const correctionSnapshot = snapshot(encounter, `${actorName}: ${activity.label}`, { kind: "check" });
   const hostileShip = starshipShip(encounter.starship, "hostile");
   const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: starshipShipKey(encounter.starship, "hostile"), npcName: hostileShip?.name ?? "Hostile ship", type: "starship", skillLabel: skill.label, outcome: skill.invalidStarship ? `${outcome} — Invalid Crew Statistic` : outcome, phase: encounter.currentRound, timestamp: Date.now(), detailLabel: role.label, details: [activity.label] };
   logEntry.correctionSnapshotId = correctionSnapshot.id;
@@ -5182,6 +5269,7 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
   const starshipOutcome = updateStarshipCalculatedOutcome(encounter);
   if (starshipOutcome) logEntry.details.push(starshipOutcome === "victory" ? "Starship victory." : "Starship defeat.");
   if (roll.correction) logEntry.details.push(`GM corrected outcome from ${roll.correction.originalOutcome}.`);
+  finishCheckSnapshot(encounter, correctionSnapshot);
   await Store.save(encounter);
   await announceStarshipOutcome(encounter, priorStarshipOutcome);
   game.socket.emit(SOCKET, { action: "refresh" });
@@ -5257,7 +5345,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   const newlyReachedInfluenceThresholds = request.type === "influence"
     ? npc.thresholds.filter((threshold) => threshold.points > previousPoints && threshold.points <= previousPoints + points)
     : [];
-  const correctionSnapshot = snapshot(encounter, `${actorName} → ${npcName}: ${skill.label}`);
+  const correctionSnapshot = snapshot(encounter, `${actorName} → ${npcName}: ${skill.label}`, { kind: "check" });
   encounter.checkLog ??= [];
   const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: npc.id, npcName, type: request.type, degree,
     skillLabel: skill.label, outcome: skill.invalidDiscovery ? `${outcome} — Invalid Discovery Skill` : skill.invalidInfluence ? `${outcome} — Invalid Influence Skill` : outcome,
@@ -5336,6 +5424,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
       const complication = infiltration.complications.find((entry) => entry.id === npc.infiltrationComplicationId);
       if (complication) complication.resolved = true;
     }
+    if (infiltrationObstacleCompleted) advanceInfiltrationObstacle(encounter, actor.id, npc.id);
   }
   const newlyLostInfluenceThresholds = request.type === "influence"
     ? npc.thresholds.filter((threshold) => threshold.points <= previousPoints && threshold.points > npc.points)
@@ -5377,6 +5466,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     if (boon) boon.remaining = Math.max(0, (boon.remaining ?? boon.uses) - 1);
   }
   if (roll.correction) logEntry.details.push(`GM corrected outcome from ${roll.correction.originalOutcome}.`);
+  finishCheckSnapshot(encounter, correctionSnapshot);
   await Store.save(encounter);
   game.socket.emit(SOCKET, { action: "refresh" });
   const resultText = request.type === "discovery"
@@ -5754,6 +5844,7 @@ async function spendInfiltrationEdgePoint(encounterId) {
     const complication = encounter.infiltration.complications.find((candidate) => candidate.id === obstacle.infiltrationComplicationId);
     if (complication) complication.resolved = true;
   }
+  if (infiltrationObstacleComplete(obstacle, entry.actorId)) advanceInfiltrationObstacle(encounter, entry.actorId, obstacle.id);
   encounter.infiltration.awareness.points = Math.max(0, encounter.infiltration.awareness.points - (originalDegree === 0 ? 2 : 1));
   entry.degree = 2;
   entry.outcome = "Success — Edge Point";

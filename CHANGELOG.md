@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.27 — 2026-11-13
+
+- Added **Hide future obstacles from players** to Infiltration encounter settings, enabled by default. Players can review completed obstacles and the current obstacle while the GM retains the full objective board. The player sidebar follows the same visibility rule.
+- Completing a group Infiltration obstacle now advances the active obstacle to the next unresolved one, so the newly revealed obstacle is immediately playable.
+- Continued the player-facing tracker polish across encounter types: controlled single-PC users are selected automatically, player actions sit near the header, and an optional **Situation and Stakes** briefing can collapse when space is tight.
+- Restricted **Undo Last Check** to the most recently resolved check. It no longer restores editor saves, pause/resume state, or unrelated encounter lifecycle changes.
+
 ## 0.8.26 — 2026-11-13
 
 - Player-specific **My Best Influence Option** discoveries now identify the character whose statistics produced the recommendation, such as **Felix's best Influence option — Diplomacy**.
