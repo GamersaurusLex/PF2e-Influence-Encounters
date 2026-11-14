@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.29 — 2026-11-14
+
+- Fixed the Infiltration editor’s **Overcome Checks** tab. Each obstacle now presents its configured Overcome checks and the correct **Add Overcome Check** control; unrelated Discovery Skills, Influence Skills, and the Influence-only text parser no longer appear.
+- Updated Infiltration drag-and-drop copy to consistently refer to obstacles rather than Influence targets.
+
 ## 0.8.28 — 2026-11-14
 
 - Rebuilt the GM encounter footer around live progress controls: phase or round advancement, declared outcomes, player access, and pause/resume remain immediately available while manual adjustments and recovery tools move into a compact **GM Tools** dialog.
