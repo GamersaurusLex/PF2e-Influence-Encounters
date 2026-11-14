@@ -166,12 +166,17 @@
 .pending-check-queue article small { color: var(--color-text-secondary); }
 .pending-check-queue article button { margin: 0; white-space: nowrap; }
 .pending-check-actions { justify-items: end; gap: .35rem; }
-.pending-check-resolution-actions, .pending-check-cleanup-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .35rem; }
-.pending-check-cleanup-actions button { font-size: .85em; opacity: .85; }
+.pending-check-resolution-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .35rem; }
+.pending-check-more { position: relative; justify-self: end; }
+.pending-check-more summary { cursor: pointer; color: var(--color-text-secondary); font-size: .85em; text-align: right; }
+.pending-check-more > div { display: grid; gap: .35rem; margin-top: .35rem; }
+.pending-check-more button { font-size: .85em; opacity: .9; }
 @media (max-width: 700px) {
   .pending-check-queue article { grid-template-columns: 2rem minmax(0, 1fr); }
   .pending-check-actions { grid-column: 1 / -1; justify-items: stretch; }
-  .pending-check-resolution-actions, .pending-check-cleanup-actions { justify-content: stretch; }
+  .pending-check-resolution-actions { justify-content: stretch; }
+  .pending-check-more { justify-self: stretch; }
+  .pending-check-more summary { text-align: left; }
   .pending-check-actions button { flex: 1 1 auto; }
 }
 .player-roll-queue { margin: 1rem 0; padding: .75rem; border: 1px solid var(--color-border-highlight); border-radius: 8px; background: color-mix(in srgb, var(--color-bg-option) 88%, var(--color-warm-2, #9f6b3f)); }
@@ -189,6 +194,18 @@
 .player-primary-actions small { color: var(--color-text-secondary); }
 .player-primary-actions .player-actions { flex: 0 0 auto; margin: 0; }
 .player-primary-actions .player-actions button { margin: 0; white-space: nowrap; }
+.player-turn-rail { position: sticky; top: .35rem; z-index: 3; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .55rem .9rem; align-items: center; margin: .45rem 0 .65rem; padding: .65rem .75rem; border: 1px solid var(--color-border-highlight); border-radius: 8px; background: color-mix(in srgb, var(--color-bg-option) 86%, var(--color-warm-2, #9f6b3f)); box-shadow: 0 .45rem .85rem color-mix(in srgb, var(--color-shadow-dark) 28%, transparent); }
+.player-turn-context, .player-turn-copy { display: grid; gap: .12rem; min-width: 0; }
+.player-turn-context small, .player-turn-copy small { color: var(--color-text-secondary); }
+.player-turn-context strong::before { content: ""; display: inline-block; width: .55rem; height: .55rem; margin-right: .45rem; border-radius: 50%; background: var(--color-warm-1, #d69b52); box-shadow: 0 0 .5rem var(--color-warm-1, #d69b52); }
+.player-turn-selector { grid-column: 1 / -1; }
+.player-turn-action { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: .75rem; }
+.player-turn-action .player-actions { flex: 0 0 auto; margin: 0; }
+.player-turn-action .player-actions button { margin: 0; white-space: nowrap; }
+.influence-tracker.player-view .tracker-content > .tab[data-tab="encounter"] > .player-participant-picker,
+.influence-tracker.player-view .tracker-content > .tab[data-tab="encounter"] > .player-primary-actions { display: none; }
+.influence-tracker.player-view button:focus-visible,
+.influence-tracker.player-view .tracker-tabs .item:focus-visible { outline: 3px solid var(--color-border-highlight); outline-offset: 2px; }
 .player-participant-picker { margin: .55rem 0 .45rem; }
 .player-participant-picker h4 { margin: 0 0 .3rem; }
 .encounter-player-details { margin: .5rem 0 .75rem; padding: .45rem .6rem; border: 1px solid var(--color-border-light-2); border-radius: 6px; background: color-mix(in srgb, var(--color-bg-option) 58%, transparent); }
@@ -196,7 +213,7 @@
 .encounter-player-details p { margin: .45rem 0 .1rem; }
 .player-single-influence-details { cursor: pointer; }
 .player-single-influence-details summary { font-weight: 700; }
-@media (max-width: 700px) { .player-primary-actions { align-items: stretch; flex-direction: column; } .player-primary-actions .player-actions { flex: 1 1 auto; margin-top: 0; } .player-primary-actions .player-actions button { flex: 1 1 0; } }
+@media (max-width: 700px) { .player-primary-actions { align-items: stretch; flex-direction: column; } .player-primary-actions .player-actions { flex: 1 1 auto; margin-top: 0; } .player-primary-actions .player-actions button { flex: 1 1 0; } .player-turn-rail { grid-template-columns: 1fr; align-items: stretch; } .player-turn-action { align-items: stretch; flex-direction: column; } .player-turn-action .player-actions { display: flex; flex: 1 1 auto; } .player-turn-action .player-actions button { flex: 1 1 0; } }
 @media (max-width: 700px) {
   .influence-tracker.player-view { padding: .75rem; }
   .influence-tracker.player-view .encounter-header { grid-template-columns: 56px minmax(0, 1fr) auto; gap: .65rem; padding-bottom: .5rem; }
@@ -287,7 +304,15 @@
   .influence-sidebar-actions { grid-template-columns: 1fr; }
   .influence-sidebar-actions button:first-child { grid-column: auto; }
 }
-.influence-tracker .end-encounter { margin-left: auto; }
+.influence-tracker .gm-command-bar { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.influence-tracker .gm-primary-actions, .influence-tracker .gm-state-actions, .influence-tracker .gm-utility-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.influence-tracker .gm-utility-actions { margin-left: auto; justify-content: flex-end; }
+.influence-tracker .end-encounter { border-color: var(--color-level-error-border, var(--color-border-highlight)); }
+@media (max-width: 700px) {
+  .influence-tracker .gm-command-bar { align-items: stretch; flex-direction: column; }
+  .influence-tracker .gm-primary-actions, .influence-tracker .gm-state-actions, .influence-tracker .gm-utility-actions { justify-content: stretch; }
+  .influence-tracker .gm-command-bar button { flex: 1 1 auto; }
+}
 .starship-status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin: .75rem 0; }
 .starship-ship-card { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: .55rem; align-items: center; }
 .starship-ship-card img { width: 48px; height: 48px; border: 0; border-radius: 50%; object-fit: cover; }

@@ -2188,6 +2188,41 @@ async function chooseLoreSpecialization(category) {
   });
 }
 
+function openGMTools(tracker, encounter) {
+  const pointLabel = encounter?.subsystemType === "research" ? "RP"
+    : encounter?.subsystemType === "chase" ? "CP"
+      : encounter?.subsystemType === "skill" ? "SP"
+        : encounter?.subsystemType === "infiltration" ? "AP"
+          : "IP";
+  const invoke = async (action, dataset = {}) => tracker._action(
+    { currentTarget: { dataset: { action, ...dataset } } },
+    { dataset: { action, ...dataset } }
+  );
+  const buttons = [];
+  if (encounter?.status === "active") {
+    buttons.push(
+      { action: "reset", icon: "fas fa-rotate", label: "Reset Actions", callback: () => invoke("reset-actions") },
+      { action: "subtract", icon: "fas fa-minus", label: `-1 ${pointLabel}`, callback: () => invoke("change-ip", { delta: "-1" }) },
+      { action: "add", icon: "fas fa-plus", label: `+1 ${pointLabel}`, callback: () => invoke("change-ip", { delta: "1" }) },
+      { action: "set", icon: "fas fa-sliders", label: `Set ${pointLabel}`, callback: () => invoke("adjust") },
+      { action: "undo", icon: "fas fa-rotate-left", label: "Undo Last Check", callback: () => invoke("undo") }
+    );
+    if (encounter.subsystemType === "infiltration") buttons.push(
+      { action: "edge", icon: "fas fa-diamond", label: "Spend Edge Point", callback: () => invoke("spend-edge") },
+      { action: "resources", icon: "fas fa-sliders", label: "Set AP / Edge", callback: () => invoke("adjust-infiltration-resource") },
+      { action: "complication", icon: "fas fa-triangle-exclamation", label: "Trigger Complication", callback: () => invoke("trigger-infiltration-complication") }
+    );
+  }
+  buttons.push({ action: "edit", icon: "fas fa-pen-to-square", label: "Edit Encounter", callback: () => invoke("edit") });
+  if (encounter?.subsystemType === "influence" && !influenceRewardsAreVisible(encounter)) buttons.push({ action: "reveal", icon: "fas fa-eye", label: "Reveal Outcomes Now", callback: () => invoke("reveal-influence-rewards") });
+  if (encounter?.subsystemType === "chase" && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual" && !encounter?.victorySplashShown) buttons.push({ action: "splash", icon: "fas fa-trophy", label: "Show Victory Splash", callback: () => invoke("victory-splash") });
+  new DialogV2({
+    window: { title: "GM Tools" },
+    content: `<p class="hint">Corrections, manual adjustments, and encounter-specific controls.</p>`,
+    buttons: [...buttons, { action: "close", label: "Close", default: true }]
+  }).render({ force: true });
+}
+
 class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
     id: "influence-encounter-tracker", classes: [MODULE_ID],
@@ -2200,7 +2235,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       "cancel-request", "resolve-request-manually", "reopen-player-roll", "forget-request", "roll-approved-check", "submit-approved-check", "open-for-players", "pause", "resume", "victory-splash", "reveal-influence-rewards",
       "undo", "next-round", "prior", "advance", "pass-obstacle", "adjust", "change-ip", "apply-reward",
       "reset-actions", "declare-skill-outcome", "declare-chase-outcome", "declare-infiltration-outcome", "spend-edge", "adjust-infiltration-resource", "trigger-infiltration-complication",
-      "end-encounter", "remove-effect", "resolve-pending-discovery", "correct-outcome"
+      "end-encounter", "remove-effect", "resolve-pending-discovery", "correct-outcome", "open-gm-tools"
     ].map((action) => [action, function(event, target) { return this._action(event, target); }]))
   };
   static PARTS = { tracker: { template: `modules/${MODULE_ID}/templates/tracker.hbs` } };
@@ -2308,6 +2343,20 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       : isInfiltration
         ? !!activeNpcRecord && !infiltrationObstacleComplete(activeNpcRecord, selection.actorId) && !activeNpcRecord.infiltrationNarrativeOnly && (!activeNpcRecord.infiltrationAssignedActorId || activeNpcRecord.infiltrationAssignedActorId === selection.actorId)
         : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
+    const canAct = !manualMode && !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !encounter.skillOutcome && !encounter?.infiltration?.outcome && !!selection.actorId && sourceAvailable;
+    const playerTurnStatus = !selectedActor
+      ? "Choose a participating PC to act."
+      : manualMode
+        ? "Roll at the table; your GM records the outcome."
+        : canAct
+          ? "Choose a check when you are ready."
+          : encounter?.status === "paused"
+            ? "This encounter is paused."
+            : encounter?.actorsActed?.[selectedActor.id]
+              ? "You have already acted this round."
+              : sourceAvailable
+                ? "Waiting for the GM to advance the encounter."
+                : "This target is not currently available.";
     const infiltrationObjectiveView = selectedInfiltrationObjective ? { ...selectedInfiltrationObjective, name: selectedInfiltrationObjective.name, obstacleCount: infiltrationObstacles(encounter, selectedInfiltrationObjective.id).length } : null;
     const edgePoints = isInfiltration ? { party: Number(encounter.infiltration.edgePoints.party) || 0, personal: Math.max(0, Number(encounter.infiltration.edgePoints.byActor?.[selection.actorId]) || 0) } : null;
     return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, manualInfluence, playerSingleInfluence, playerDescription, showParticipantRoster, showParticipantSelector, showTargetSelector, showNoControlledActors, selectedActorName: selectedActor ? participantDisplayName(encounter, selectedActor) : "", checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints,
@@ -2328,7 +2377,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       playerRollChecks: manualMode ? [] : playerRollChecks(encounter),
       isGM: game.user.isGM, showPoints: game.user.isGM || encounter?.publicPoints, noEncounter: !encounter, isPaused: encounter?.status === "paused",
       canOpenForPlayers: game.user.isGM && encounter?.status === "active",
-      canAct: !manualMode && !!encounter && encounter.status === "active" && !encounter.chaseOutcome && !encounter.skillOutcome && !encounter?.infiltration?.outcome && !!selection.actorId && sourceAvailable,
+      canAct, playerTurnStatus,
       canPause: game.user.isGM && encounter?.status === "active", canResume: game.user.isGM && encounter?.status === "paused",
       canRevealInfluenceRewards: game.user.isGM && encounter?.subsystemType === "influence" && ["active", "paused"].includes(encounter.status) && !influenceRewardsAreVisible(encounter),
       canTriggerVictorySplash: game.user.isGM && isChase && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual",
@@ -2362,6 +2411,10 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       return new EncounterEditor(encounter).render({ force: true });
     }
     if (!encounter) return;
+    if (action === "open-gm-tools") {
+      if (!game.user.isGM || encounter.subsystemType === "starship") return;
+      return openGMTools(this, encounter);
+    }
     if (action === "roll-approved-check") return rollApprovedPlayerCheck(encounter.id, target.dataset.id);
     if (action === "submit-approved-check") return submitApprovedPlayerCheck(encounter.id, target.dataset.id);
     if (encounter.subsystemType === "starship") {

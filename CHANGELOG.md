@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.28 — 2026-11-14
+
+- Rebuilt the GM encounter footer around live progress controls: phase or round advancement, declared outcomes, player access, and pause/resume remain immediately available while manual adjustments and recovery tools move into a compact **GM Tools** dialog.
+- Added an encounter-aware **GM Tools** dialog for manual point adjustments, action resets, the safely scoped **Undo Last Check**, Infiltration Awareness and Edge controls, complications, editing, and special encounter actions.
+- Consolidated Pending Check controls so normal resolution is prominent and recovery actions live in a compact **More options** disclosure.
+
 ## 0.8.27 — 2026-11-13
 
 - Added **Hide future obstacles from players** to Infiltration encounter settings, enabled by default. Players can review completed obstacles and the current obstacle while the GM retains the full objective board. The player sidebar follows the same visibility rule.

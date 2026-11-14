@@ -66,29 +66,38 @@ return playerRollChecks;`
   assert.deepEqual({ canRoll: submit.canRoll, canSubmit: submit.canSubmit }, { canRoll: false, canSubmit: true });
 });
 
-test("player roll actions stay above the scrollable encounter detail", async () => {
-  for (const template of ["tracker", "starship-tracker"]) {
-    const html = await readFile(new URL(`../templates/${template}.hbs`, import.meta.url), "utf8");
-    const dock = html.indexOf('class="player-roll-queue player-action-dock"');
-    const precedingNav = html.lastIndexOf("tracker-tabs", dock);
-    const content = html.indexOf('class="tracker-content"', dock);
-    assert.ok(dock >= 0, `${template} supplies an immediate player action dock`);
-    assert.ok(precedingNav < dock && dock < content, `${template} places the action dock before scrollable encounter details`);
-  }
+test("player turn rail stays above encounter detail", async () => {
+  const html = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
+  const rail = html.indexOf('class="player-turn-rail"');
+  const nav = html.indexOf("tracker-tabs", rail);
+  const content = html.indexOf('class="tracker-content"', rail);
+  assert.ok(rail >= 0, "tracker supplies a persistent player turn rail");
+  assert.ok(rail < nav && nav < content, "the turn rail leads tabs and encounter detail");
   const css = await readFile(new URL("../styles/influence-encounters.css", import.meta.url), "utf8");
-  assert.match(css, /\.player-action-dock \{ position: sticky;/);
+  assert.match(css, /\.player-turn-rail \{ position: sticky;/);
   assert.match(css, /\.influence-tracker\.player-view \.encounter-header/);
 });
 
 test("player controls lead encounter content and undo is limited to resolved checks", async () => {
   const trackerTemplate = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
-  assert.ok(trackerTemplate.indexOf('class="player-primary-actions"') < trackerTemplate.indexOf('class="npc-status-list"'),
+  assert.ok(trackerTemplate.indexOf('class="player-turn-rail"') < trackerTemplate.indexOf('class="npc-status-list"'),
     "players reach their action controls before target and encounter detail");
   assert.match(trackerTemplate, /Undo Last Check/);
   assert.match(source, /function isCheckSnapshot\(entry\)/);
   assert.match(source, /reverse\(\)\.find\(isCheckSnapshot\)/);
   assert.match(source, /function restoreLastCheck\(encounter, entry\)/);
   assert.match(source, /kind: "check"/);
+});
+
+test("GM controls prioritize progress and compact recovery actions", async () => {
+  const trackerTemplate = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
+  const css = await readFile(new URL("../styles/influence-encounters.css", import.meta.url), "utf8");
+  assert.match(trackerTemplate, /class="gm-command-bar"/);
+  assert.match(trackerTemplate, /data-action="open-gm-tools"/);
+  assert.match(trackerTemplate, /class="pending-check-more"/);
+  assert.match(source, /function openGMTools\(tracker, encounter\)/);
+  assert.match(source, /window: \{ title: "GM Tools" \}/);
+  assert.match(css, /\.influence-tracker \.gm-command-bar/);
 });
 
 test("Infiltration hides future obstacles while keeping completed and current obstacles visible to players", async () => {
@@ -136,7 +145,8 @@ test("approved player rolls use PF2e's native visible-or-blind card and preserve
   const trackerTemplate = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
   assert.match(trackerTemplate, /Keep this result, or use one Fortune effect from the chat card/);
   assert.match(trackerTemplate, /> Keep Result</);
-  assert.match(trackerTemplate, /Approved: rolling \{\{skillLabel\}\}…/);
+  assert.match(trackerTemplate, /Roll \{\{skillLabel\}\} now/);
+  assert.match(source, /const playerTurnStatus/);
 });
 
 test("only actual Fortune replacements auto-submit an approved player roll", () => {
