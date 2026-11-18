@@ -164,6 +164,14 @@ test("personal best Influence discoveries identify the acting PC for the table",
 
 test("creative approaches and recovery controls use the shared check pipeline", () => {
   assert.match(source, /const attempts = speculativeAttemptSkills\(actor, npc, knownSkills\);/);
+  assert.match(source, /if \(!skill && request\.proposed\) \{/,
+    "every ordinary encounter type creates a GM-adjudicable fallback for an unlisted proposed skill");
+  assert.match(source, /invalidAttempt: true/,
+    "unlisted proposals carry a shared invalid state until the GM approves them");
+  assert.match(source, /const creativeRequest = !!request\.proposed && skill\.invalidAttempt;/,
+    "the approval dialog appears for each ordinary encounter type");
+  assert.match(source, /known: \["influence", "chase", "infiltration"\]\.includes\(request\.type\) \? true : undefined/,
+    "saved creative skills remain selectable in encounter types that show only known checks");
   assert.match(source, /function starshipProposalChoices\(actor, activity\)/);
   assert.match(source, /proposed: !!localSelection\.starshipProposed/);
   assert.match(source, /Treat <strong>\$\{esc\(skill\.label\)\}<\/strong> as valid for this check/);
@@ -177,6 +185,8 @@ test("creative approaches and recovery controls use the shared check pipeline", 
   assert.doesNotMatch(manualResolution, /includes\(Number\(requestedDegree\)\) \? Number\(requestedDegree\)/,
     "a dismissed prompt must not coerce null into critical failure");
   const executeCheck = between("async function executeCheck", "async function offerDiscovery");
+  assert.match(executeCheck, /skill\.invalidAttempt && request\.type !== "discovery"/,
+    "an unapproved proposed skill resolves as a failure while discovery keeps its established blind-check behavior");
   assert.match(executeCheck, /request\.type !== "discovery" \|\| \(!skill\.invalidDiscovery && degree >= 2\)/,
     "successful Discovery checks receive a public sanitized result card");
   assert.match(executeCheck, /GM Adjudicated \$\{outcome\}/,
@@ -186,6 +196,17 @@ test("creative approaches and recovery controls use the shared check pipeline", 
   const executeStarship = between("async function executeStarshipCheck", "async function executeCheck");
   assert.match(executeStarship, /messageMode:\s*["']public["']/,
     "directly resolved starship checks remain public");
+});
+
+test("critical discovery offers preserve their exact encounter context and ignore blank configured skills", () => {
+  const choices = between("function discoveryChoiceOptions", "async function collectDiscoveryChoices");
+  assert.match(choices, /String\(skill\?\.slug \?\? ""\)\.trim\(\) && String\(skill\?\.label \?\? ""\)\.trim\(\)/,
+    "lowest and highest DC discoveries ignore unfinished editor rows");
+  const resolve = between("async function resolveDiscovery", "async function resumePendingDiscoveries");
+  assert.match(resolve, /String\(skill\?\.slug \?\? ""\)\.trim\(\) && String\(skill\?\.label \?\? ""\)\.trim\(\)/,
+    "resolution uses the same valid-skill filter as the player picker");
+  assert.match(source, /collectDiscoveryChoices\(payload\.choices, payload\.actorId, \{ encounterId: payload\.encounterId, logEntryId: payload\.logEntryId \}\)/,
+    "player discovery prompts retain the specific encounter and critical-success log entry");
 });
 
 test("tracker changes native template and title when switching subsystem on the same instance", () => {

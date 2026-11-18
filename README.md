@@ -39,6 +39,12 @@ https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/latest/down
 - Preconfigured Governor and Abeo chase encounters
 - Whole-chase text parsing for Paizo-style obstacle blocks, Chase Points, Overcome checks, DCs, and descriptions
 
+## Latest release — v0.8.31
+
+- Fixes critical Discovery selections so every selection remains tied to the exact encounter and check-log entry that produced it.
+- Ignores unfinished blank skill rows when calculating Discovery choices such as lowest and highest non-Lore DC.
+- Extends the GM approval workflow for an unlisted player-proposed skill to ordinary Skill, Research, Chase, and Infiltration checks, as well as Influence and Discovery. The GM can approve the approach, adjust its DC, and optionally save it as a listed option.
+
 ## Installation
 
 Copy the `influence-encounters` directory into Foundry's `Data/modules` directory, restart Foundry, and enable **Influence Encounters for PF2e** in a PF2e world.

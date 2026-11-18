@@ -5246,15 +5246,22 @@ async function adjudicate(request, { resolveManually = false } = {}) {
   const list = request.type === "discovery" ? npc.discovery : npc.influence;
   let skill = request.skillId ? list.find((s) => s.id === request.skillId) : list.find((s) => s.slug === request.skillSlug);
   if (skill?.anyLore && request.skillSlug) skill = { ...skill, slug: request.skillSlug, label: request.skillLabel ?? skill.label, lore: true };
-  if (!skill && request.type === "discovery") {
-    const secret = list.find((entry) => entry.secret);
-    skill = { id: `attempt:${request.skillSlug}`, slug: request.skillSlug, label: request.skillLabel ?? request.skillSlug,
-      dc: Number(secret?.dc ?? list[0]?.dc ?? 20), invalidDiscovery: true };
-  }
-  if (!skill && request.type === "influence") {
-    const fallback = list[0];
-    skill = { id: `attempt:${request.skillSlug}`, slug: request.skillSlug, label: request.skillLabel ?? request.skillSlug,
-      dc: Number(fallback?.dc ?? 20), invalidInfluence: true };
+  if (!skill && request.proposed) {
+    // Every ordinary encounter type accepts a trained proposed skill. The GM
+    // decides whether it is valid, chooses any DC adjustment, and can save it
+    // as a future option. Discovery retains its special secret-skill behavior.
+    const secret = request.type === "discovery" ? list.find((entry) => entry.secret) : null;
+    const fallback = secret ?? list[0];
+    skill = {
+      id: `attempt:${request.skillSlug}`,
+      slug: request.skillSlug,
+      label: request.skillLabel ?? request.skillSlug,
+      dc: Number(fallback?.dc ?? 20),
+      lore: isLoreSkill({ slug: request.skillSlug, label: request.skillLabel }),
+      invalidAttempt: true,
+      invalidDiscovery: request.type === "discovery",
+      invalidInfluence: request.type === "influence"
+    };
   }
   if (!skill) return cancelPendingCheck(encounter.id, request.id, "The requested skill is no longer available.");
   if (skill.slug === "esoteric-lore") {
@@ -5277,12 +5284,10 @@ async function adjudicate(request, { resolveManually = false } = {}) {
   ].filter((modifier) => modifier.id.startsWith("boon:") || modifier.description || Number(modifier.value));
   const customMods = [];
   const rows = mods.map((m) => `<label class="influence-mod"><input type="checkbox" name="mod" value="${m.id}" ${(m.enforced || (m.id.startsWith("boon:") && m.activation === "automatic")) ? "checked" : ""} ${m.enforced ? "disabled" : ""}> <strong>${esc(m.label)}</strong> ${signed(Number(m.value))} <small>${esc(m.description ?? "")}</small></label>`).join("");
-  const creativeRequest = !!request.proposed && (skill.invalidDiscovery || skill.invalidInfluence);
-  const invalidNotice = skill.invalidDiscovery
-    ? `<p class="hint"><strong>GM:</strong> This is not a valid Discovery skill for this encounter. The blind roll consumes the character's action but cannot grant a Discovery.</p>`
-    : skill.invalidInfluence
-      ? `<p class="hint"><strong>GM:</strong> This is not a configured Influence skill for this target. The roll consumes the character's action and resolves as a failure.</p>`
-      : "";
+  const creativeRequest = !!request.proposed && skill.invalidAttempt;
+  const invalidNotice = creativeRequest
+    ? `<p class="hint"><strong>GM:</strong> ${esc(skill.label)} is not among this ${esc(request.type === "skill" ? "Skill Challenge" : request.type.titleCase())}'s configured skills. Approve it below to use this check; otherwise it resolves as a failure.</p>`
+    : "";
   const creativeControls = creativeRequest
     ? `<section class="creative-check-decision"><h4>Unlisted approach</h4><label><input type="checkbox" name="allowCreative"> Treat <strong>${esc(skill.label)}</strong> as valid for this check</label><label><input type="checkbox" name="saveCreative" disabled> Add it as a listed option for this target</label><p class="hint">Leaving this unchecked preserves the normal invalid-check result.</p></section>`
     : "";
@@ -5328,15 +5333,17 @@ async function adjudicate(request, { resolveManually = false } = {}) {
         const boonDcAdjust = resolveTypedDcAdjustment(selected.filter((m) => m.selected && m.mode === "dc"));
         const dcAdjust = (Number(html.querySelector('[name="dcAdjust"]')?.value) || 0) + boonDcAdjust;
         const allowCreative = !!html.querySelector('[name="allowCreative"]')?.checked;
-        const resolvedSkill = allowCreative ? { ...skill, invalidDiscovery: false, invalidInfluence: false } : skill;
+        const resolvedSkill = allowCreative ? { ...skill, invalidAttempt: false, invalidDiscovery: false, invalidInfluence: false } : skill;
         if (allowCreative && html.querySelector('[name="saveCreative"]')?.checked) {
-          list.push({
-            id: randomID(), slug: resolvedSkill.slug, label: resolvedSkill.label, description: "",
-            dc: Number(resolvedSkill.dc) + dcAdjust, dcModified: true, lore: isLoreSkill(resolvedSkill),
-            secret: request.type === "discovery" ? false : undefined,
-            known: request.type === "influence" ? true : undefined
-          });
-          await Store.save(encounter);
+          if (!list.some((entry) => entry.slug === resolvedSkill.slug)) {
+            list.push({
+              id: randomID(), slug: resolvedSkill.slug, label: resolvedSkill.label, description: "",
+              dc: Number(resolvedSkill.dc) + dcAdjust, dcModified: true, lore: isLoreSkill(resolvedSkill),
+              secret: request.type === "discovery" ? false : undefined,
+              known: ["influence", "chase", "infiltration"].includes(request.type) ? true : undefined
+            });
+            await Store.save(encounter);
+          }
         }
         encounter.activeEffects.push(...customMods.filter((mod) => mod.persist).map((mod) => ({ id: randomID(), kind: "modifier", targetNpcId: npc.id, label: mod.label, value: mod.value, type: mod.type, mode: "roll", scope: "both", skills: [], uses: 999, remaining: 999 })));
         await approvePlayerCheck(encounter, request, actor, {
@@ -5513,7 +5520,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   // Adjudication may have been opened from a slightly older encounter copy.
   // Rebind valid configured skills to this freshly loaded record so discoveries
   // and known Influence skills mutate the version that Store.save persists.
-  if (!skill.invalidDiscovery && !skill.invalidInfluence) {
+  if (!skill.invalidAttempt && !skill.invalidDiscovery && !skill.invalidInfluence) {
     const currentSkills = request.type === "discovery" ? npc.discovery : npc.influence;
     const currentSkill = request.skillId
       ? currentSkills.find((entry) => entry.id === request.skillId)
@@ -5548,7 +5555,9 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     });
   }
   if (!roll) return;
-  const degree = skill.invalidInfluence ? 1 : Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
+  const degree = skill.invalidInfluence || (skill.invalidAttempt && request.type !== "discovery")
+    ? 1
+    : Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess);
   const outcome = ["Critical Failure", "Failure", "Success", "Critical Success"][degree] ?? "Unknown";
   const outcomeClass = ["critical-failure", "failure", "success", "critical-success"][degree] ?? "unknown";
   const points = request.type === "research"
@@ -5566,7 +5575,14 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   const correctionSnapshot = snapshot(encounter, `${actorName} → ${npcName}: ${skill.label}`, { kind: "check" });
   encounter.checkLog ??= [];
   const logEntry = { id: randomID(), actorId: actor.id, actorName, npcId: npc.id, npcName, type: request.type, degree,
-    skillLabel: skill.label, outcome: skill.invalidDiscovery ? `${outcome} — Invalid Discovery Skill` : skill.invalidInfluence ? `${outcome} — Invalid Influence Skill` : outcome,
+    skillLabel: skill.label,
+    outcome: skill.invalidDiscovery
+      ? `${outcome} — Invalid Discovery Skill`
+      : skill.invalidAttempt
+        ? `${outcome} — Unapproved ${request.type.titleCase()} Skill`
+        : skill.invalidInfluence
+          ? `${outcome} — Invalid Influence Skill`
+          : outcome,
     phase: encounter.currentPhase, timestamp: Date.now(), detailLabel: "", details: [] };
   logEntry.correctionSnapshotId = correctionSnapshot.id;
   logEntry.correctionRequestId = request.id;
@@ -5801,7 +5817,8 @@ function discoveryRevealState(record, { create = false } = {}) {
 
 function usableInfluenceSkills(actor, npc) {
   const trained = new Map(trainedAttemptSkills(actor, npc).map((skill) => [skill.slug, skill]));
-  return availableSkillsForActor(actor, npc?.influence ?? [], npc).flatMap((skill) => {
+  const configured = (npc?.influence ?? []).filter((skill) => String(skill?.slug ?? "").trim() && String(skill?.label ?? "").trim());
+  return availableSkillsForActor(actor, configured, npc).flatMap((skill) => {
     const actorSkill = trained.get(skill.slug) ?? configuredSaveChoice(actor, skill);
     const modifier = actorStatisticModifier(actor, skill);
     return actorSkill && Number.isFinite(modifier) ? [{ ...skill, modifier }] : [];
@@ -5829,7 +5846,7 @@ function discoveryChoiceOptions(encounter, npc, actor, record, selections = []) 
   const selected = new Set(selections.map((selection) => selection.choice));
   const selectedSkills = new Set(selections.filter((selection) => selection.choice === "skill").map((selection) => selection.named));
   const secret = npc?.discovery?.find((skill) => skill.secret);
-  const nonLore = (npc?.influence ?? []).filter((skill) => !skill.lore);
+  const nonLore = (npc?.influence ?? []).filter((skill) => !skill.lore && String(skill?.slug ?? "").trim() && String(skill?.label ?? "").trim());
   const low = nonLore.toSorted((a, b) => Number(a.dc) - Number(b.dc))[0];
   const high = nonLore.toSorted((a, b) => Number(b.dc) - Number(a.dc))[0];
   const skillChoices = trainedSkillChoicesWithPerception(actor)
@@ -5881,7 +5898,7 @@ async function resolveDiscovery(encounterId, userId, selections, logEntryId) {
   if (!npc) return;
   const npcName = targetDisplayName(npc);
   const secret = npc.discovery.find((s) => s.secret);
-  const nonLore = npc.influence.filter((s) => !s.lore);
+  const nonLore = npc.influence.filter((skill) => !skill.lore && String(skill?.slug ?? "").trim() && String(skill?.label ?? "").trim());
   const low = nonLore.toSorted((a, b) => a.dc - b.dc)[0];
   const high = nonLore.toSorted((a, b) => b.dc - a.dc)[0];
   encounter.discoveries[userId] ??= { npcs: {} };
@@ -6202,7 +6219,10 @@ Hooks.once("ready", async () => {
     if (payload.action === "starship-action-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) saveStarshipActionSelection(payload);
     if (payload.action === "manual-starship-action" && game.user.isGM && game.users.activeGM?.id === game.user.id) receiveManualStarshipAction(payload);
     if (payload.action === "check-request-status" && payload.userId === game.user.id) ui.notifications.info(payload.message);
-    if (payload.action === "discovery-offer" && payload.userId === game.user.id) collectDiscoveryChoices(payload.choices, payload.actorId).then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
+    if (payload.action === "discovery-offer" && payload.userId === game.user.id) {
+      collectDiscoveryChoices(payload.choices, payload.actorId, { encounterId: payload.encounterId, logEntryId: payload.logEntryId })
+        .then((selections) => game.socket.emit(SOCKET, { action: "discovery-selection", encounterId: payload.encounterId, userId: game.user.id, selections, logEntryId: payload.logEntryId }));
+    }
     if (payload.action === "discovery-selection" && game.user.isGM && game.users.activeGM?.id === game.user.id) resolveDiscovery(payload.encounterId, payload.userId, payload.selections, payload.logEntryId);
     if (payload.action === "progress-clock-refresh") progressClockDatabase()?.refresh?.();
     if (payload.action === "open-encounter" && (!payload.userIds || payload.userIds.includes(game.user.id))) setTimeout(() => renderTracker(true), 150);
