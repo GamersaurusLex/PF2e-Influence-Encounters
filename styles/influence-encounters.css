@@ -13,6 +13,9 @@
 .influence-table-status { margin: .55rem 0 -.1rem; color: var(--color-text-secondary); font-size: .9rem; }
 .influence-table-status i { margin-right: .3rem; color: var(--color-warm-1); }
 .threshold-track { display: flex; gap: .4rem; margin: 1rem 0; }
+.ordered-skill-status { margin: .8rem 0; padding: .65rem .8rem; border: 1px solid var(--color-border-highlight); border-radius: 6px; background: color-mix(in srgb, var(--color-bg-option) 78%, var(--color-border-highlight) 22%); }
+.ordered-skill-status h3, .ordered-skill-status p { margin: 0; }
+.ordered-skill-status p + .participants, .ordered-skill-status p + .player-actions, .ordered-skill-status .hint { margin-top: .6rem; }
 .tracker-tabs { display: flex; gap: .5rem; border-bottom: 1px solid var(--color-border-light-2); margin: .75rem 0; }
 .tracker-tabs .item { padding: .45rem .65rem; }
 .tracker-tabs .item.active { font-weight: 700; border-bottom: 2px solid var(--color-border-highlight); }

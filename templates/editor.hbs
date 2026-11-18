@@ -99,6 +99,10 @@
         <label>Failure Outcome<textarea name="failureText">{{encounter.failureText}}</textarea></label>
         {{else}}{{#if isSkill}}
         <div class="form-group"><label>Current Round</label><div class="form-fields"><input type="number" min="1" name="currentRound" value="{{encounter.currentRound}}"><label>Round Limit</label><input type="number" min="1" name="roundLimit" value="{{encounter.roundLimit}}"></div></div>
+        <fieldset><legend>Challenge Flow</legend>
+          <div class="form-group"><label class="checkbox"><input type="checkbox" name="orderedChallenges" {{checked encounter.orderedChallenges}}> Reveal challenges in order</label></div>
+          <p class="hint">Players see only the current challenge. Completed challenges disappear. The GM reveals the next challenge after its completion rule is met.</p>
+        </fieldset>
         <div class="form-group"><label>Round Flow</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="promptAdvanceWhenAllActed" {{checked encounter.promptAdvanceWhenAllActed}}> Prompt the GM to advance after every participating PC acts</label></div></div>
         <div class="form-group"><label>Point Tracking</label><div class="form-fields"><select name="skillScoringMode">{{selectOptions skillScoringModes selected=encounter.skillScoringMode}}</select></div></div>
         <div class="form-group"><label>Victory Condition</label><div class="form-fields"><select name="skillVictoryMode">{{selectOptions skillVictoryModes selected=encounter.skillVictoryMode}}</select></div></div>
@@ -134,7 +138,7 @@
       </fieldset>
       {{#unless isStarship}}
       <h2>{{#if isResearch}}Research Sources{{else}}{{#if isChase}}Ordered Obstacles{{else}}{{#if isInfiltration}}Infiltration Obstacles{{else}}{{#if isSkill}}Skill Challenges{{else}}Influence Targets{{/if}}{{/if}}{{/if}}{{/if}}</h2>
-      <p class="hint">{{#if isResearch}}Add each book, witness, location, or other source the PCs can investigate. Drag Actors, Items, Journals, or Journal pages to reuse their existing names and images.{{else}}{{#if isSkill}}Add one or more situations that offer different checks. Challenges remain available throughout the encounter; earned SP goes to the shared pool or acting PC according to the scoring mode.{{else}}Drag Actors from the sidebar or Tokens from the canvas to populate names and images. Background and Personality are GM-only; Appearance is shown to players.{{/if}}{{/if}}</p>
+      <p class="hint">{{#if isResearch}}Add each book, witness, location, or other source the PCs can investigate. Drag Actors, Items, Journals, or Journal pages to reuse their existing names and images.{{else}}{{#if isSkill}}Add one or more situations that offer different checks. Enable ordered flow above when PCs must clear each challenge before the GM reveals the next.{{else}}Drag Actors from the sidebar or Tokens from the canvas to populate names and images. Background and Personality are GM-only; Appearance is shown to players.{{/if}}{{/if}}</p>
       {{#unless isChase}}{{#unless isSkill}}<div class="actor-drop-zone" data-actor-drop="npc"><i class="fa-solid {{#if isResearch}}fa-book-open{{else}}fa-user-plus{{/if}}"></i><strong>Drop {{#if isResearch}}research sources{{else}}{{#if isInfiltration}}infiltration obstacles{{else}}influence targets{{/if}}{{/if}} here</strong><span>{{#if isResearch}}Actor, Item, Journal, or Journal Page{{else}}Any Actor or Token{{/if}}</span></div>{{/unless}}{{/unless}}
       {{#unless encounter.npcs.length}}<p class="hint empty-targets"><i class="fa-solid fa-circle-info"></i> This encounter has no {{#if isResearch}}sources{{else}}targets{{/if}} yet. Use the button below{{#unless isResearch}} or drop an NPC above{{/unless}}.</p>{{/unless}}
       {{#each encounter.npcs}}
@@ -169,6 +173,7 @@
         <label>Obstacle Description<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
         <label>Special Rules / Conditional Bonuses<textarea name="npcs.{{@index}}.requirements">{{requirements}}</textarea></label>
         {{else}}{{#if @root.isSkill}}
+        {{#if @root.encounter.orderedChallenges}}<div class="trait-grid"><label>Completion Rule<select name="npcs.{{@index}}.completionMode"><option value="all-success" {{#unless (eq completionMode "designated-success")}}selected{{/unless}}>Every PC succeeds</option><option value="designated-success" {{#if (eq completionMode "designated-success")}}selected{{/if}}>One designated PC succeeds</option></select></label></div><label>Failure Consequence (GM only)<textarea name="npcs.{{@index}}.failureConsequence" placeholder="Reminder for a failed check or failure threshold.">{{failureConsequence}}</textarea></label>{{/if}}
         <label>Challenge Description<textarea name="npcs.{{@index}}.background">{{background}}</textarea></label>
         <label>Special Rules / Conditional Bonuses<textarea name="npcs.{{@index}}.requirements">{{requirements}}</textarea></label>
         {{else}}

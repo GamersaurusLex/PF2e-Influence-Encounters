@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.30 — 2026-11-18
+
+- Added ordered **Skill Encounter** challenges. The GM can reveal one challenge at a time, require every PC to succeed or designate one PC, record GM-only failure consequences, and reveal the next challenge only after the current rule is complete. Completed challenges disappear from player view; the last challenge automatically wins the encounter.
+- New encounters and their default challenges now use Lex's reusable Forge artwork paths: `my-icons/lex-generic-encounter-icon.webp`, `my-assets/lex-generic-encounter-cinematic.webp`, and `my-assets/lex-generic-challenge.webp` instead of PF2e/SF2e system icons.
+
 ## 0.8.29 — 2026-11-14
 
 - Fixed the Infiltration editor’s **Overcome Checks** tab. Each obstacle now presents its configured Overcome checks and the correct **Add Overcome Check** control; unrelated Discovery Skills, Influence Skills, and the Influence-only text parser no longer appear.
