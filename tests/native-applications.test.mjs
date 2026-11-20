@@ -166,6 +166,12 @@ test("only actual Fortune replacements auto-submit an approved player roll", () 
   assert.equal(hasFortuneReplacement({ rolls: [{}], flags: { pf2e: { modifiers: [{ slug: "hero-bonus-points" }] } } }), true);
   assert.equal(hasFortuneReplacement({ rolls: [{}], flags: { pf2e: { context: { options: ["check:reroll:mythic-points"] }, modifiers: [] } } }), true,
     "native Mythic Rewrite Fate replacements are Fortune effects");
+  const createdReroll = between('Hooks.on("createChatMessage"', 'Hooks.on("updateChatMessage"');
+  assert.match(createdReroll, /const fortuneReplacement = hasFortuneReplacement\(message\);/);
+  assert.match(createdReroll, /fortuneReplacement \? pendingRerollRequests\.get\(actorId\) : ""/,
+    "every native Fortune replacement can recover its pending check");
+  assert.match(createdReroll, /autoSubmit: fortuneReplacement/,
+    "every native Fortune replacement auto-submits through the shared player-roll pipeline");
 });
 
 test("newer Fortune results cannot be overwritten by a stale roll record", () => {

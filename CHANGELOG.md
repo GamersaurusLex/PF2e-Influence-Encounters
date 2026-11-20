@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.34 — 2026-11-20
+
+- Fixed native Hero Point and **Rewrite Fate** rerolls that create a replacement chat card. Every recognized Fortune replacement now automatically finalizes its approved check across Influence, Discovery, Research, Chase, Skill, Infiltration, and Starship encounters.
+
 ## 0.8.33 — 2026-11-20
 
 - Fixed **Undo Last Check** as a true do-over. Undo now removes the completed check, its player-roll request, and its encounter effects, returning that PC to an available action state for a fresh check instead of leaving their player panel awaiting the prior result.

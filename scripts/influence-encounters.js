@@ -6346,11 +6346,12 @@ Hooks.on("preDeleteChatMessage", (message) => {
 Hooks.on("createChatMessage", (message) => {
   if (chatMessageAuthorId(message) !== game.user.id) return;
   const actorId = message.actor?.id ?? message.speaker?.actor;
+  const fortuneReplacement = hasFortuneReplacement(message);
   const requestId = pendingCheckIdFromMessage(message)
-    || (rollMessageOptions(message).includes("check:reroll") ? pendingRerollRequests.get(actorId) : "");
+    || (fortuneReplacement ? pendingRerollRequests.get(actorId) : "");
   if (!requestId) return;
   pendingRerollRequests.delete(actorId);
-  trackPlayerRollMessage(message, requestId, { autoSubmit: rollMessageOptions(message).includes("check:reroll") });
+  trackPlayerRollMessage(message, requestId, { autoSubmit: fortuneReplacement });
 });
 
 Hooks.on("updateChatMessage", (message, changed) => {
