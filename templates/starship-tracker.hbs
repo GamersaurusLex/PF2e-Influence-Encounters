@@ -16,6 +16,7 @@
       <section class="starship-crew-roster"><div class="starship-section-heading"><h3>Crew</h3><small>Round assignments</small></div>
       <ul class="participant-roster">{{#each actors}}<li class="{{#if acted}}acted{{/if}}"><i class="fas {{#if acted}}fa-check-circle{{else}}fa-circle{{/if}}"></i> {{name}} <small>— {{roleLabel}}{{#if acted}}, acted{{/if}}</small></li>{{/each}}</ul>
       </section>
+      {{#if isGM}}<footer class="starship-gm-tools"><button data-action="open-gm-tools"><i class="fas fa-toolbox"></i> GM Tools</button></footer>{{/if}}
       {{#if controlledActors.length}}<div class="starship-section-heading crew-selector-heading"><h4>Choose your PC</h4><small>Select a crew member to assign</small></div><div class="participants participant-actions starship-crew-selector">{{#each controlledActors}}<button type="button" data-action="select-participant" data-actor-id="{{id}}" class="participant {{#if selected}}selected{{/if}} {{#if acted}}acted{{/if}}"><i class="fas fa-user"></i> {{name}}</button>{{/each}}</div>{{/if}}
       {{#if starshipOutcome}}
         <section class="npc-profile starship-outcome"><h3><i class="fas {{#if starshipVictory}}fa-trophy{{else}}fa-flag{{/if}}"></i> Starship {{starshipOutcome}}</h3><p>{{#if starshipVictory}}The enemy ship has been defeated. End and publish this encounter when you are ready.{{else}}The encounter has ended in defeat. End and publish this encounter when you are ready.{{/if}}</p></section>

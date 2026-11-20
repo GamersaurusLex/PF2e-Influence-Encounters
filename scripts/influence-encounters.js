@@ -907,6 +907,7 @@ function normalizeEncounterCollections(encounter) {
   encounter.subjectTurnOrder = ["before", "after"].includes(encounter.subjectTurnOrder) ? encounter.subjectTurnOrder : (encounter.chaseType === "run-away" ? "after" : "before");
   encounter.obscureFutureObstacles = !!encounter.obscureFutureObstacles;
   encounter.chaseDesignedPartySize = Math.max(1, Math.trunc(Number(encounter.chaseDesignedPartySize) || 4));
+  if (encounter.subsystemType === "research" && encounter.promptAdvanceWhenAllActed === undefined) encounter.promptAdvanceWhenAllActed = true;
   encounter.promptAdvanceWhenAllActed = !!encounter.promptAdvanceWhenAllActed;
   encounter.roundLimit = encounter.subsystemType === "skill"
     ? Math.max(1, Number(encounter.roundLimit) || 3)
@@ -945,6 +946,7 @@ function normalizeEncounterCollections(encounter) {
     threshold.boons.forEach((boon) => normalizeReward(boon));
   });
   encounter.researchInterval ??= { value: 1, unit: "hour" };
+  encounter.researchAdvanceWorldTime = !!encounter.researchAdvanceWorldTime;
   encounter.progressClock = foundry.utils.mergeObject({ enabled: false, clockId: "" }, encounter.progressClock ?? {}, { inplace: false, overwrite: true });
   encounter.participantNicknames = encounter.participantNicknames && typeof encounter.participantNicknames === "object" ? encounter.participantNicknames : {};
   encounter.discovery = indexedArray(encounter.discovery);
@@ -1130,6 +1132,7 @@ const DEFAULT_ENCOUNTER = {
   starship: null,
   researchThresholds: [],
   researchInterval: { value: 1, unit: "hour" },
+  researchAdvanceWorldTime: false,
   progressClock: { enabled: false, clockId: "" },
   chaseType: "chase-down",
   currentRound: 1,
@@ -1944,13 +1947,13 @@ function actorStatisticModifier(actor, skill) {
 
 const roundAdvancePrompts = new Set();
 async function maybePromptRoundAdvance(encounter) {
-  if (!game.user.isGM || !encounter?.promptAdvanceWhenAllActed || !["influence", "chase", "skill", "infiltration"].includes(encounter.subsystemType)) return;
+  if (!game.user.isGM || !encounter?.promptAdvanceWhenAllActed || !["influence", "research", "chase", "skill", "infiltration"].includes(encounter.subsystemType)) return;
   if (encounter.status !== "active" || encounter.chaseOutcome || encounter.skillOutcome || encounter.pendingChecks?.length) return;
   if (encounter.subsystemType === "influence" && encounter.currentPhase >= encounter.phases) return;
   const participants = encounterParticipants(encounter);
   if (!participants.length || !participants.every((actor) => encounter.actorsActed?.[actor.id])) return;
   const roundNumber = encounter.subsystemType === "influence" ? encounter.currentPhase : encounter.currentRound;
-  const unit = encounter.subsystemType === "influence" ? "phase" : "round";
+  const unit = encounter.subsystemType === "influence" ? "phase" : encounter.subsystemType === "research" ? "research interval" : "round";
   const key = `${encounter.id}:${unit}:${roundNumber}`;
   if (roundAdvancePrompts.has(key)) return;
   roundAdvancePrompts.add(key);
@@ -1959,6 +1962,23 @@ async function maybePromptRoundAdvance(encounter) {
     if (advance) await tracker?._action({ currentTarget: { dataset: { action: encounter.subsystemType === "influence" ? "advance" : "next-round" } } });
   } finally {
     roundAdvancePrompts.delete(key);
+  }
+}
+
+function encounterIntervalSeconds(interval) {
+  const value = Math.max(1, Number(interval?.value) || 1);
+  return value * ({ minute: 60, hour: 3600, day: 86400 }[interval?.unit] ?? 3600);
+}
+
+async function advanceResearchWorldTime(encounter) {
+  if (!encounter.researchAdvanceWorldTime) return false;
+  try {
+    await game.time.advance(encounterIntervalSeconds(encounter.researchInterval));
+    return true;
+  } catch (error) {
+    console.error(`${MODULE_ID} | Could not advance campaign time`, error);
+    ui.notifications.error("Foundry could not advance the campaign clock.");
+    return false;
   }
 }
 
@@ -2291,6 +2311,10 @@ function openGMTools(tracker, encounter) {
   if (encounter?.status === "active") {
     buttons.push(
       { action: "reset", icon: "fas fa-rotate", label: "Reset Actions", callback: () => invoke("reset-actions") },
+      { action: "test", icon: "fas fa-flask", label: "Test Player Check", callback: () => invoke("test-player-check") },
+      { action: "reset-encounter", icon: "fas fa-arrow-rotate-left", label: "Reset Encounter", callback: () => invoke("reset-encounter") }
+    );
+    if (encounter.subsystemType !== "starship") buttons.push(
       { action: "subtract", icon: "fas fa-minus", label: `-1 ${pointLabel}`, callback: () => invoke("change-ip", { delta: "-1" }) },
       { action: "add", icon: "fas fa-plus", label: `+1 ${pointLabel}`, callback: () => invoke("change-ip", { delta: "1" }) },
       { action: "set", icon: "fas fa-sliders", label: `Set ${pointLabel}`, callback: () => invoke("adjust") },
@@ -2307,7 +2331,7 @@ function openGMTools(tracker, encounter) {
   if (encounter?.subsystemType === "chase" && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual" && !encounter?.victorySplashShown) buttons.push({ action: "splash", icon: "fas fa-trophy", label: "Show Victory Splash", callback: () => invoke("victory-splash") });
   new DialogV2({
     window: { title: "GM Tools" },
-    content: `<p class="hint">Corrections, manual adjustments, and encounter-specific controls.</p>`,
+    content: `<p class="hint">Test Player Check uses the normal request, approval, roll, and chat-card pipeline as the selected PC. Reset Encounter clears live progress, pending checks, and the check log while keeping this encounter's configuration.</p>`,
     buttons: [...buttons, { action: "close", label: "Close", default: true }]
   }).render({ force: true });
 }
@@ -2323,7 +2347,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       "declare-starship-outcome", "select-participant", "select-npc", "request", "adjudicate-request",
       "cancel-request", "resolve-request-manually", "reopen-player-roll", "forget-request", "roll-approved-check", "submit-approved-check", "open-for-players", "pause", "resume", "victory-splash", "reveal-influence-rewards",
       "undo", "next-round", "prior", "advance", "pass-obstacle", "adjust", "change-ip", "apply-reward",
-      "reset-actions", "declare-skill-outcome", "declare-chase-outcome", "declare-infiltration-outcome", "spend-edge", "adjust-infiltration-resource", "trigger-infiltration-complication",
+      "reset-actions", "reset-encounter", "test-player-check", "declare-skill-outcome", "declare-chase-outcome", "declare-infiltration-outcome", "spend-edge", "adjust-infiltration-resource", "trigger-infiltration-complication",
       "end-encounter", "remove-effect", "resolve-pending-discovery", "correct-outcome", "open-gm-tools", "designate-skill-actor", "reveal-next-skill-challenge", "record-ordered-skill-result"
     ].map((action) => [action, function(event, target) { return this._action(event, target); }]))
   };
@@ -2486,8 +2510,8 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       canDeclareInfiltrationOutcome: game.user.isGM && isInfiltration && encounter?.status === "active" && !encounter?.infiltration?.outcome,
       canPrior: !isResearch && !isChase && !isSkill && !isInfiltration && encounter?.status === "active" && (encounter?.currentPhase ?? 1) > 1,
       canNext: !isResearch && !isChase && !isSkill && !isInfiltration && encounter?.status === "active" && (encounter?.currentPhase ?? 1) < (encounter?.phases ?? 1),
-      canNextRound: (isChase || isSkill || isInfiltration) && encounter?.status === "active" && !encounter?.chaseOutcome && !encounter?.skillOutcome && !encounter?.infiltration?.outcome && !(orderedSkill && skillChallengeReady(encounter, orderedChallenge)) && !(isSkill && !orderedSkill && encounter.skillVictoryMode === "gm" && encounter.roundLimit && encounter.currentRound >= encounter.roundLimit),
-      roundActionLabel: isSkill && encounter?.skillVictoryMode === "goal" && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : isBeatClock && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : "Next Round" };
+      canNextRound: (isResearch || isChase || isSkill || isInfiltration) && encounter?.status === "active" && !encounter?.chaseOutcome && !encounter?.skillOutcome && !encounter?.infiltration?.outcome && !(orderedSkill && skillChallengeReady(encounter, orderedChallenge)) && !(isSkill && !orderedSkill && encounter.skillVictoryMode === "gm" && encounter.roundLimit && encounter.currentRound >= encounter.roundLimit),
+      roundActionLabel: isResearch ? "Next Research Interval" : isSkill && encounter?.skillVictoryMode === "goal" && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : isBeatClock && encounter?.roundLimit && encounter.currentRound >= encounter.roundLimit ? "Finish Final Round" : "Next Round" };
   }
   _onRender(context, options) {
     super._onRender(context, options);
@@ -2512,12 +2536,14 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     }
     if (!encounter) return;
     if (action === "open-gm-tools") {
-      if (!game.user.isGM || encounter.subsystemType === "starship") return;
+      if (!game.user.isGM) return;
       return openGMTools(this, encounter);
     }
     if (action === "roll-approved-check") return rollApprovedPlayerCheck(encounter.id, target.dataset.id);
     if (action === "submit-approved-check") return submitApprovedPlayerCheck(encounter.id, target.dataset.id);
     if (encounter.subsystemType === "starship") {
+      if (action === "test-player-check") return openGMTestPlayerCheck(encounter);
+      if (action === "reset-encounter") return resetActiveEncounter(encounter.id);
       if (action === "claim-starship-role") {
         const actorId = encounterViewSelection(encounter).actorId;
         return requestStarshipRole(encounter, actorId, target.dataset.roleId);
@@ -2631,6 +2657,8 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     if (action === "forget-request") return forgetPendingCheck(encounter.id, target.dataset.id);
     if (action === "cancel-request") return cancelPendingCheck(encounter.id, target.dataset.id, "The GM canceled this check request.");
     if (action === "open-for-players") return openEncounterForParticipants(encounter);
+    if (action === "test-player-check") return openGMTestPlayerCheck(encounter);
+    if (action === "reset-encounter") return resetActiveEncounter(encounter.id);
     if (action === "spend-edge") return spendInfiltrationEdgePoint(encounter.id);
     if (action === "adjust-infiltration-resource") return adjustInfiltrationResource(encounter.id);
     if (action === "trigger-infiltration-complication") {
@@ -2656,7 +2684,19 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       discardUndoneCheckRequest(encounter, entry);
       ui.notifications.info(`Removed the last check: ${entry.label}. The PC can make a new check.`);
     } else if (action === "next-round") {
-      if (encounter.subsystemType === "skill") {
+      if (encounter.subsystemType === "research") {
+        if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before ending the Research interval.");
+        snapshot(encounter, "Finish Research interval");
+        encounter.currentRound += 1;
+        encounter.actorsActed = {};
+        const timeAdvanced = await advanceResearchWorldTime(encounter);
+        const duration = `${encounter.researchInterval.value} ${encounter.researchInterval.unit}${Number(encounter.researchInterval.value) === 1 ? "" : "s"}`;
+        await ChatMessage.create({
+          content: `<div class="influence-chat influence-result"><strong>Research Interval ${encounter.currentRound}</strong><p>A new ${esc(duration)} research interval begins.${timeAdvanced ? ` Campaign time advances ${esc(duration)}.` : ""}</p></div>`,
+          style: CONST.CHAT_MESSAGE_STYLES.OOC,
+          flags: { [MODULE_ID]: { messageKind: "result" } }
+        });
+      } else if (encounter.subsystemType === "skill") {
         if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before ending the round.");
         snapshot(encounter, "Finish skill encounter round");
         if (orderedSkillEncounter(encounter)) {
@@ -3436,6 +3476,7 @@ async function openCreateEncounterDialog(event, folderId = "") {
         encounter.name = data.name?.trim() || (encounter.subsystemType === "research" ? "New Research Encounter" : encounter.subsystemType === "chase" ? "New Chase" : encounter.subsystemType === "skill" ? "New Skill Encounter" : encounter.subsystemType === "infiltration" ? "New Infiltration" : encounter.subsystemType === "starship" ? "New Cinematic Starship Encounter" : "New Influence Encounter");
         encounter.encounterType = ["multiple", "research", "chase", "skill", "infiltration", "starship"].includes(data.type) ? "multiple" : "single";
         if (encounter.subsystemType === "research") {
+          encounter.promptAdvanceWhenAllActed = true;
           encounter.researchThresholds = [
             [2, "First Discovery"],
             [4, "Second Discovery"],
@@ -3625,6 +3666,10 @@ async function activateEncounter(id) {
   encounter.status = "active";
   encounter.endedAt = null;
   encounter.presentationVisible = true;
+  encounter.resetState = {
+    npcAvailability: Object.fromEntries((encounter.npcs ?? []).map((npc) => [npc.id, npc.availability])),
+    starshipShips: encounter.subsystemType === "starship" ? deepClone(encounter.starship?.ships ?? {}) : null
+  };
   await Store.setActive(id);
   await Store.save(encounter);
   renderTracker(true);
@@ -4493,6 +4538,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
         this.encounter.infiltration.hideFutureObstacles = this.element.querySelector('[name="infiltration.hideFutureObstacles"]')?.checked ?? true;
       }
       this.encounter.promptAdvanceWhenAllActed = this.element.querySelector('[name="promptAdvanceWhenAllActed"]')?.checked ?? false;
+      this.encounter.researchAdvanceWorldTime = this.element.querySelector('[name="researchAdvanceWorldTime"]')?.checked ?? false;
       this.encounter.orderedChallenges = this.element.querySelector('[name="orderedChallenges"]')?.checked ?? false;
       this.encounter.showResearchSkills = this.element.querySelector('[name="showResearchSkills"]')?.checked ?? this.encounter.showResearchSkills;
       this.encounter.revealInfluenceRewardsDuringEncounter = this.element.querySelector('[name="revealInfluenceRewardsDuringEncounter"]')?.checked ?? this.encounter.revealInfluenceRewardsDuringEncounter;
@@ -4855,6 +4901,175 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
       if (game.user.isGM) receiveCheckRequest(payload); else game.socket.emit(SOCKET, payload);
     } }]
   }).render({ force: true });
+}
+
+async function openGMTestPlayerCheck(encounter) {
+  if (!game.user.isGM) return;
+  if (encounter.subsystemType === "starship") return openGMTestStarshipCheck(encounter);
+  const participants = encounterParticipants(encounter);
+  if (!participants.length) return ui.notifications.warn("Add at least one participating PC before running a test check.");
+  const availableNpcs = encounter.subsystemType === "skill" && orderedSkillEncounter(encounter)
+    ? encounter.npcs.filter((npc) => npc.id === encounter.activeNpcId)
+    : encounter.subsystemType === "chase"
+      ? encounter.npcs.filter((npc) => npc.id === encounter.activeNpcId)
+      : encounter.npcs;
+  if (!availableNpcs.length) return ui.notifications.warn("This encounter has no available target to test.");
+  const actorOptions = participants.map((actor) => `<option value="${esc(actor.id)}">${esc(participantDisplayName(encounter, actor))}</option>`).join("");
+  const targetOptions = availableNpcs.map((npc) => `<option value="${esc(npc.id)}">${esc(targetDisplayName(npc))}</option>`).join("");
+  const type = encounter.subsystemType === "research" ? "research"
+    : encounter.subsystemType === "chase" ? "chase"
+      : encounter.subsystemType === "skill" ? "skill"
+        : encounter.subsystemType === "infiltration" ? "infiltration"
+          : "influence";
+  new DialogV2({
+    window: { title: "Test Player Check" },
+    content: `<div class="influence-adjudicate"><p>Run the normal player check pipeline as a selected participant. This produces the same request, approval, roll, result, and check-log records as play.</p><div class="form-group"><label>PC</label><select name="actorId">${actorOptions}</select></div><div class="form-group"><label>${type === "research" ? "Research Source" : type === "chase" ? "Obstacle" : type === "skill" ? "Challenge" : type === "infiltration" ? "Obstacle" : "Influence Target"}</label><select name="npcId">${targetOptions}</select></div></div>`,
+    buttons: [
+      { action: "continue", default: true, icon: "fas fa-flask", label: "Choose Check", callback: (_event, button) => requestCheck(encounter, type, button.form.elements.actorId.value, button.form.elements.npcId.value) },
+      { action: "cancel", label: "Cancel" }
+    ]
+  }).render({ force: true });
+}
+
+async function openGMTestStarshipCheck(encounter) {
+  const participants = encounterParticipants(encounter);
+  const roles = encounter.starship?.roles ?? [];
+  if (!participants.length || !roles.length) return ui.notifications.warn("Add participating PCs and Starship roles before running a test check.");
+  const actorOptions = participants.map((actor) => `<option value="${esc(actor.id)}">${esc(participantDisplayName(encounter, actor))}</option>`).join("");
+  const roleOptions = roles.map((role) => `<option value="${esc(role.id)}">${esc(role.label)}</option>`).join("");
+  new DialogV2({
+    window: { title: "Test Starship Check" },
+    content: `<div class="influence-adjudicate"><p>Choose the PC and crew role for this test. The next panel chooses a legal activity and statistic, then runs the normal approval, roll, chat-card, and outcome pipeline.</p><div class="form-group"><label>PC</label><select name="actorId">${actorOptions}</select></div><div class="form-group"><label>Crew Role</label><select name="roleId">${roleOptions}</select></div></div>`,
+    buttons: [
+      { action: "continue", default: true, icon: "fas fa-flask", label: "Choose Activity", callback: async (_event, button) => {
+        const current = Store.get(encounter.id);
+        const actorId = button.form.elements.actorId.value;
+        const roleId = button.form.elements.roleId.value;
+        current.starship.stage = "actions";
+        current.starship.roleSelections = { [actorId]: roleId };
+        current.starship.actionSelections = {};
+        current.actorsActed = {};
+        await Store.save(current);
+        await openGMTestStarshipActivity(current, actorId, roleId);
+      } },
+      { action: "cancel", label: "Cancel" }
+    ]
+  }).render({ force: true });
+}
+
+async function openGMTestStarshipActivity(encounter, actorId, roleId) {
+  const actor = game.actors.get(actorId);
+  const role = starshipRole(encounter, roleId);
+  const activities = role?.activities ?? [];
+  if (!actor || !role || !activities.length) return ui.notifications.warn("That PC or crew role is no longer available.");
+  const options = activities.map((activity) => {
+    const skills = starshipActivityChoices(actor, activity);
+    return `<option value="${esc(activity.id)}" ${skills.length ? "" : "disabled"}>${esc(activity.label)}${skills.length ? "" : " (no eligible statistic)"}</option>`;
+  }).join("");
+  new DialogV2({
+    window: { title: `Test ${role.label} Action` },
+    content: `<div class="influence-adjudicate"><div class="form-group"><label>Activity</label><select name="activityId">${options}</select></div><p class="hint">The test uses the first eligible statistic for the selected activity. Choose a different statistic through the normal player action controls when testing that specific branch.</p></div>`,
+    buttons: [
+      { action: "roll", default: true, icon: "fas fa-dice-d20", label: "Run Test Check", callback: async (_event, button) => {
+        const current = Store.get(encounter.id);
+        const activityId = button.form.elements.activityId.value;
+        const activity = starshipActivityFor(current, roleId, activityId);
+        const skill = starshipActivityChoices(actor, activity)[0];
+        if (!skill) return ui.notifications.warn("That activity has no eligible statistic for this PC.");
+        current.starship.actionSelections[actorId] = { activityId, skillSlug: skill.slug, skillLabel: skill.label, proposed: false };
+        await Store.save(current);
+        await requestStarshipCheck(current, actorId);
+      } },
+      { action: "cancel", label: "Cancel" }
+    ]
+  }).render({ force: true });
+}
+
+function resetEncounterRuntime(encounter) {
+  encounter.currentPhase = 1;
+  encounter.currentRound = 1;
+  encounter.points = 0;
+  encounter.researchPoints = 0;
+  encounter.skillPoints = 0;
+  encounter.skillPointsByActor = {};
+  encounter.skillWinnerActorId = "";
+  encounter.skillOutcome = "";
+  encounter.chaseOutcome = "";
+  encounter.actorsActed = {};
+  encounter.phaseActions = {};
+  encounter.activeActorId = "";
+  encounter.pendingChecks = [];
+  encounter.pendingDiscoveries = [];
+  encounter.checkLog = [];
+  encounter.history = [];
+  encounter.discoveries = {};
+  encounter.influenceRewardsManuallyRevealed = false;
+  encounter.progressClock ??= { enabled: false, clockId: "" };
+  encounter.progressClock.clockId = "";
+  encounter.activeEffects = (encounter.activeEffects ?? []).map((effect) => ({ ...effect, remaining: effect.uses }));
+  encounter.npcs = (encounter.npcs ?? []).filter((npc) => !npc.infiltrationComplicationId);
+  encounter.npcs.forEach((npc) => {
+    npc.points = 0;
+    if (encounter.resetState?.npcAvailability?.[npc.id]) npc.availability = encounter.resetState.npcAvailability[npc.id];
+    npc.researchByActor = {};
+    npc.progressClockId = "";
+    npc.infiltrationPointsByActor = {};
+    npc.completed = false;
+    npc.designatedActorId = "";
+    npc.skillProgress = { successes: {}, failures: {} };
+    npc.thresholds?.forEach((threshold) => threshold.boons?.forEach((boon) => {
+      boon.remaining = boon.uses;
+      boon.applied = false;
+      boon.active = boon.activation === "automatic";
+    }));
+  });
+  if (encounter.subsystemType === "chase") {
+    encounter.activeNpcId = encounter.npcs[0]?.id ?? "";
+    encounter.opponentPosition = encounter.subjectStartPosition;
+  } else if (["skill", "infiltration"].includes(encounter.subsystemType)) {
+    encounter.activeNpcId = encounter.npcs[0]?.id ?? "";
+  }
+  if (encounter.subsystemType === "infiltration" && encounter.infiltration) {
+    encounter.infiltration.outcome = "";
+    encounter.infiltration.awareness.points = 0;
+    encounter.infiltration.awareness.clock.clockId = "";
+    encounter.infiltration.awareness.thresholds.forEach((threshold) => { threshold.triggered = false; });
+    encounter.infiltration.complications.forEach((complication) => {
+      complication.triggered = false;
+      complication.resolved = false;
+      complication.runtimeObstacleId = "";
+      complication.assignedActorId = "";
+    });
+  }
+  if (encounter.subsystemType === "starship" && encounter.starship) {
+    encounter.starship.stage = "role-selection";
+    encounter.starship.roleSelections = {};
+    encounter.starship.actionSelections = {};
+    encounter.starship.outcome = "";
+    if (encounter.resetState?.starshipShips) encounter.starship.ships = deepClone(encounter.resetState.starshipShips);
+  }
+}
+
+async function resetActiveEncounter(encounterId) {
+  const encounter = Store.get(encounterId);
+  if (!encounter || !game.user.isGM) return;
+  const confirmed = await DialogV2.confirm({
+    window: { title: "Reset Encounter" },
+    content: `<p>Reset <strong>${esc(encounter.name)}</strong> to its opening live state?</p><p>This clears progress, pending checks, discoveries, the check log, and Undo history. Encounter setup stays intact. Existing chat cards remain as a record of the test run.</p>`
+  });
+  if (!confirmed) return;
+  resetEncounterRuntime(encounter);
+  await Store.save(encounter);
+  await ChatMessage.create({
+    content: `<div class="influence-chat influence-result"><strong>Encounter Reset</strong><p>${esc(encounter.name)} has been reset for a fresh run.</p></div>`,
+    style: CONST.CHAT_MESSAGE_STYLES.OOC,
+    flags: { [MODULE_ID]: { messageKind: "result" } }
+  });
+  game.socket.emit(SOCKET, { action: "refresh" });
+  tracker?.render({ force: true });
+  renderInfluenceSidebar();
+  renderCinematicHud();
+  ui.notifications.info(`${encounter.name} reset.`);
 }
 
 function resolveTypedDcAdjustment(modifiers) {

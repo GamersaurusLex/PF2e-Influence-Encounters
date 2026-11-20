@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.35 — 2026-11-20
+
+- Added Research Interval flow: every participant gets one check per interval, the tracker clearly shows the current interval, and the GM can be prompted to start the next interval once everyone has acted.
+- Added optional Research world-clock advancement using the configured interval duration.
+- Added **Test Player Check** and **Reset Encounter** to GM Tools across Influence, Research, Chase, Skill, Infiltration, and Starship encounters. Test checks create normal request, approval, roll, result, and chat-card records; Reset clears live encounter progress while retaining encounter setup.
+- Added GM Tools to the Starship tracker. Starship reset restores crew-role selection and the ship-state snapshot captured when the encounter was activated.
+
 ## 0.8.34 — 2026-11-20
 
 - Fixed native Hero Point and **Rewrite Fate** rerolls that create a replacement chat card. Every recognized Fortune replacement now automatically finalizes its approved check across Influence, Discovery, Research, Chase, Skill, Infiltration, and Starship encounters.
