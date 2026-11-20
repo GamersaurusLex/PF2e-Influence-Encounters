@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.33 — 2026-11-20
+
+- Fixed **Undo Last Check** as a true do-over. Undo now removes the completed check, its player-roll request, and its encounter effects, returning that PC to an available action state for a fresh check instead of leaving their player panel awaiting the prior result.
+
 ## 0.8.30 — 2026-11-18
 
 - Added ordered **Skill Encounter** challenges. The GM can reveal one challenge at a time, require every PC to succeed or designate one PC, record GM-only failure consequences, and reveal the next challenge only after the current rule is complete. Completed challenges disappear from player view; the last challenge automatically wins the encounter.

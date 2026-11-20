@@ -1919,6 +1919,17 @@ function restoreLastCheck(encounter, entry) {
   return true;
 }
 
+function discardUndoneCheckRequest(encounter, entry) {
+  // A resolution snapshot is taken after the player has rolled, so restoring
+  // it also restores that request in its "awaiting final result" state. Undo
+  // is a clean do-over: remove only the request belonging to the undone check
+  // and leave every unrelated queued request alone.
+  const requestId = entry?.afterState?.checkLog
+    ?.find((log) => log.correctionSnapshotId === entry.id)?.correctionRequestId;
+  if (!requestId) return;
+  encounter.pendingChecks = (encounter.pendingChecks ?? []).filter((request) => request.id !== requestId);
+}
+
 function balancedChasePoints(basePoints, participantCount, designedPartySize) {
   return Math.max(1, Math.ceil((Math.max(1, Number(basePoints) || 1) * Math.max(1, participantCount)) / Math.max(1, designedPartySize)));
 }
@@ -2642,7 +2653,8 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       const entry = [...(encounter.history ?? [])].reverse().find(isCheckSnapshot);
       if (!entry) return ui.notifications.info("No resolved check is available to undo.");
       restoreLastCheck(encounter, entry);
-      ui.notifications.info(`Undid the last check: ${entry.label}.`);
+      discardUndoneCheckRequest(encounter, entry);
+      ui.notifications.info(`Removed the last check: ${entry.label}. The PC can make a new check.`);
     } else if (action === "next-round") {
       if (encounter.subsystemType === "skill") {
         if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before ending the round.");

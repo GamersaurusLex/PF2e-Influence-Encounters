@@ -86,6 +86,8 @@ test("player controls lead encounter content and undo is limited to resolved che
   assert.match(source, /function isCheckSnapshot\(entry\)/);
   assert.match(source, /reverse\(\)\.find\(isCheckSnapshot\)/);
   assert.match(source, /function restoreLastCheck\(encounter, entry\)/);
+  assert.match(source, /function discardUndoneCheckRequest\(encounter, entry\)/);
+  assert.match(source, /discardUndoneCheckRequest\(encounter, entry\)/);
   assert.match(source, /kind: "check"/);
 });
 
