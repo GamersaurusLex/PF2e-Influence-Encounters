@@ -5107,14 +5107,9 @@ async function openApprovedPlayerRoll(payload) {
       skipDialog: true,
       createMessage: true
     });
+    // The native ChatMessage hooks record this roll. Keeping one reporting
+    // path prevents an original result from racing a Fortune replacement.
     if (!roll) return;
-    reportPlayerRoll({
-      encounterId: encounter.id,
-      requestId: request.id,
-      userId: game.user.id,
-      total: Number(roll.total),
-      degree: Number(roll.degreeOfSuccess ?? roll.options?.degreeOfSuccess)
-    });
   } finally {
     approvedPlayerRollsInFlight.delete(rollKey);
   }
@@ -5125,15 +5120,47 @@ function reportPlayerRoll(payload) {
   game.socket.emit(SOCKET, { action: "player-roll-recorded", ...payload });
 }
 
-async function receivePlayerRoll(payload) {
+function playerRollRecordedAt(payload) {
+  const recordedAt = Number(payload?.recordedAt);
+  return Number.isFinite(recordedAt) && recordedAt > 0 ? recordedAt : Date.now();
+}
+
+function shouldStorePlayerRoll(current, next) {
+  if (!current) return true;
+  const currentAt = Number(current.recordedAt) || 0;
+  const nextAt = playerRollRecordedAt(next);
+  if (nextAt < currentAt) return false;
+  if (nextAt > currentAt) return true;
+  return current.messageId !== (next.messageId ?? "")
+    || Number(current.total) !== Number(next.total)
+    || Number(current.degree) !== Number(next.degree);
+}
+
+const pendingPlayerRollUpdateQueues = new Map();
+
+function receivePlayerRoll(payload) {
+  const key = `${payload?.encounterId ?? ""}:${payload?.requestId ?? ""}`;
+  if (!payload?.encounterId || !payload?.requestId) return Promise.resolve();
+  const previous = pendingPlayerRollUpdateQueues.get(key) ?? Promise.resolve();
+  const queued = previous.catch(() => undefined).then(() => receivePlayerRollNow(payload));
+  pendingPlayerRollUpdateQueues.set(key, queued);
+  queued.finally(() => {
+    if (pendingPlayerRollUpdateQueues.get(key) === queued) pendingPlayerRollUpdateQueues.delete(key);
+  }).catch((error) => console.error(`${MODULE_ID} | could not record player roll`, error));
+  return queued;
+}
+
+async function receivePlayerRollNow(payload) {
   if (!game.user.isGM || game.users.activeGM?.id !== game.user.id) return;
   const encounter = Store.get(payload.encounterId);
   const request = encounter?.pendingChecks?.find((entry) => entry.id === payload.requestId);
   const total = Number(payload.total);
   const degree = Number(payload.degree);
   if (!encounter || !request || request.requesterId !== payload.userId || !PLAYER_ROLL_STATES.has(request.status) || !Number.isFinite(total) || ![0, 1, 2, 3].includes(degree)) return;
+  const recordedAt = playerRollRecordedAt(payload);
+  if (!shouldStorePlayerRoll(request.playerRoll, { ...payload, recordedAt })) return;
   request.status = "awaiting-final-result";
-  request.playerRoll = { total, degree, messageId: payload.messageId ?? request.playerRoll?.messageId ?? "", recordedAt: Date.now() };
+  request.playerRoll = { total, degree, messageId: payload.messageId ?? request.playerRoll?.messageId ?? "", recordedAt };
   await Store.save(encounter);
   if (payload.autoSubmit) return resolveSubmittedPlayerRoll({ encounterId: encounter.id, requestId: request.id, userId: request.requesterId });
   game.socket.emit(SOCKET, { action: "refresh" });
@@ -6274,6 +6301,7 @@ function pendingCheckIdFromMessage(message) {
 
 function hasFortuneReplacement(message) {
   if ((message?.rolls?.length ?? 0) > 1) return true;
+  if (rollMessageOptions(message).some((option) => String(option).startsWith("check:reroll"))) return true;
   return (message?.flags?.pf2e?.modifiers ?? []).some((modifier) => modifier?.slug === "hero-bonus-points");
 }
 
@@ -6294,7 +6322,7 @@ async function trackPlayerRollMessage(message, requestId, { autoSubmit = false }
   ) ?? null;
   const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
   if (!request || request.requesterId !== game.user.id) return;
-  reportPlayerRoll({ encounterId: encounter.id, requestId, userId: game.user.id, total, degree, messageId: message.id, autoSubmit: autoSubmit && request.status === "awaiting-final-result" });
+  return reportPlayerRoll({ encounterId: encounter.id, requestId, userId: game.user.id, total, degree, messageId: message.id, recordedAt: Number(message.timestamp) || Date.now(), autoSubmit });
 }
 
 Hooks.on("preDeleteChatMessage", (message) => {

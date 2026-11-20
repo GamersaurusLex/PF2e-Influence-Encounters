@@ -133,6 +133,8 @@ test("approved player rolls use PF2e's native visible-or-blind card and preserve
   assert.match(approvedRoll, /skipDialog:\s*true/);
   assert.match(approvedRoll, /approvedPlayerRollsInFlight/);
   assert.match(approvedRoll, /approvedPlayerRollRequest\(payload\)/);
+  assert.doesNotMatch(approvedRoll, /reportPlayerRoll\(/,
+    "the native ChatMessage hook is the only initial-result reporting path");
   assert.match(source, /openApprovedPlayerRoll\(payload\)\.catch/);
   const rerollTracking = between("async function trackPlayerRollMessage", "Hooks.on(\"preDeleteChatMessage\"");
   assert.match(rerollTracking, /Object\.values\(Store\.all\(\)\)/);
@@ -140,8 +142,11 @@ test("approved player rolls use PF2e's native visible-or-blind card and preserve
   assert.match(source, /Hooks\.on\(["']preDeleteChatMessage["']/);
   assert.match(source, /Hooks\.on\(["']updateChatMessage["']/);
   assert.match(source, /check:reroll/);
-  assert.match(source, /autoSubmit: autoSubmit && request\.status === "awaiting-final-result"/);
+  assert.match(source, /messageId: message\.id, recordedAt: Number\(message\.timestamp\) \|\| Date\.now\(\), autoSubmit \}/,
+    "a genuine native reroll auto-submits after its serialized record is current");
   assert.match(source, /payload\.autoSubmit\) return resolveSubmittedPlayerRoll/);
+  assert.match(source, /const pendingPlayerRollUpdateQueues = new Map\(\);/,
+    "player-roll writes are serialized by pending check");
   const trackerTemplate = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
   assert.match(trackerTemplate, /Keep this result, or use one Fortune effect from the chat card/);
   assert.match(trackerTemplate, /> Keep Result</);
@@ -150,10 +155,25 @@ test("approved player rolls use PF2e's native visible-or-blind card and preserve
 });
 
 test("only actual Fortune replacements auto-submit an approved player roll", () => {
-  const hasFortuneReplacement = new Function(`${between("function hasFortuneReplacement", "async function trackPlayerRollMessage")}\nreturn hasFortuneReplacement;`)();
+  const hasFortuneReplacement = new Function("rollMessageOptions", `${between("function hasFortuneReplacement", "async function trackPlayerRollMessage")}\nreturn hasFortuneReplacement;`)(message => {
+    const options = message?.flags?.pf2e?.context?.options ?? [];
+    return Array.isArray(options) ? options : [];
+  });
   assert.equal(hasFortuneReplacement({ rolls: [{}], flags: { pf2e: { modifiers: [] } } }), false);
   assert.equal(hasFortuneReplacement({ rolls: [{}, {}], flags: { pf2e: { modifiers: [] } } }), true);
   assert.equal(hasFortuneReplacement({ rolls: [{}], flags: { pf2e: { modifiers: [{ slug: "hero-bonus-points" }] } } }), true);
+  assert.equal(hasFortuneReplacement({ rolls: [{}], flags: { pf2e: { context: { options: ["check:reroll:mythic-points"] }, modifiers: [] } } }), true,
+    "native Mythic Rewrite Fate replacements are Fortune effects");
+});
+
+test("newer Fortune results cannot be overwritten by a stale roll record", () => {
+  const pipeline = new Function(`${between("function playerRollRecordedAt", "const pendingPlayerRollUpdateQueues")}
+return { shouldStorePlayerRoll };`)();
+  const current = { total: 12, degree: 1, messageId: "original", recordedAt: 100 };
+  assert.equal(pipeline.shouldStorePlayerRoll(current, { total: 25, degree: 2, messageId: "mythic", recordedAt: 200 }), true);
+  assert.equal(pipeline.shouldStorePlayerRoll({ total: 25, degree: 2, messageId: "mythic", recordedAt: 200 }, { total: 12, degree: 1, messageId: "original", recordedAt: 100 }), false);
+  assert.equal(pipeline.shouldStorePlayerRoll({ total: 12, degree: 1, messageId: "same", recordedAt: 100 }, { total: 25, degree: 2, messageId: "same", recordedAt: 100 }), true,
+    "a replacement update on the same chat card still replaces its old result");
 });
 
 test("personal best Influence discoveries identify the acting PC for the table", () => {

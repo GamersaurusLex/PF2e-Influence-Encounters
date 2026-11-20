@@ -39,7 +39,12 @@ https://github.com/GamersaurusLex/PF2e-Influence-Encounters/releases/latest/down
 - Preconfigured Governor and Abeo chase encounters
 - Whole-chase text parsing for Paizo-style obstacle blocks, Chase Points, Overcome checks, DCs, and descriptions
 
-## Latest release — v0.8.31
+## Latest release — v0.8.32
+
+- Fixes a Fortune-reroll race that could let an original failed check overwrite a successful native Hero Point or Mythic Rewrite Fate reroll before encounter adjudication.
+- Native `check:reroll:mythic-points` now auto-submits just like the existing Hero Point and bonus-die Fortune paths.
+
+## v0.8.31
 
 - Fixes critical Discovery selections so every selection remains tied to the exact encounter and check-log entry that produced it.
 - Ignores unfinished blank skill rows when calculating Discovery choices such as lowest and highest non-Lore DC.
