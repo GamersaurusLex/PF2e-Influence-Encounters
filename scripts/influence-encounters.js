@@ -1871,41 +1871,13 @@ function isCheckSnapshot(entry) {
   return entry?.kind === "check";
 }
 
-function sameEncounterValue(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function reconcileCheckValue(current, before, after) {
-  if (sameEncounterValue(before, after)) return deepClone(current);
-  const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
-  if (Array.isArray(before) && Array.isArray(after) && Array.isArray(current) && before.length === after.length && after.length === current.length) {
-    return current.map((value, index) => reconcileCheckValue(value, before[index], after[index]));
-  }
-  if (isObject(before) && isObject(after) && isObject(current)) {
-    const result = {};
-    for (const key of new Set([...Object.keys(before), ...Object.keys(after), ...Object.keys(current)])) {
-      const beforeHasKey = Object.hasOwn(before, key);
-      const afterHasKey = Object.hasOwn(after, key);
-      const currentHasKey = Object.hasOwn(current, key);
-      if (!beforeHasKey && afterHasKey) {
-        if (!sameEncounterValue(current[key], after[key])) result[key] = deepClone(current[key]);
-      } else if (beforeHasKey && !afterHasKey) {
-        result[key] = currentHasKey ? deepClone(current[key]) : deepClone(before[key]);
-      } else result[key] = reconcileCheckValue(current[key], before[key], after[key]);
-    }
-    return result;
-  }
-  return sameEncounterValue(current, after) ? deepClone(before) : deepClone(current);
-}
-
 function finishCheckSnapshot(encounter, entry) {
   entry.afterState = snapshotState(encounter);
 }
 
 function restoreLastCheck(encounter, entry) {
-  // Restore only the runtime state a resolved check can change.  Lifecycle and
-  // editor data stay put, so Undo Last Check cannot reopen, pause, or rewrite
-  // an encounter after the fact.
+  // Restore the exact runtime state immediately before this roll. Lifecycle
+  // and editor data stay put, while every roll-derived value is rewound.
   const state = entry?.state;
   if (!state) return false;
   const runtimeFields = [
@@ -1913,11 +1885,7 @@ function restoreLastCheck(encounter, entry) {
     "checkLog", "activeEffects", "researchPoints", "skillPoints", "skillPointsByActor",
     "skillWinnerActorId", "skillOutcome", "chaseOutcome", "infiltration", "starship"
   ];
-  for (const field of runtimeFields) if (Object.hasOwn(state, field)) {
-    encounter[field] = entry.afterState && Object.hasOwn(entry.afterState, field)
-      ? reconcileCheckValue(encounter[field], state[field], entry.afterState[field])
-      : deepClone(state[field]);
-  }
+  for (const field of runtimeFields) if (Object.hasOwn(state, field)) encounter[field] = deepClone(state[field]);
   encounter.history = (encounter.history ?? []).filter((candidate) => candidate.id !== entry.id);
   return true;
 }
@@ -1931,6 +1899,20 @@ function discardUndoneCheckRequest(encounter, entry) {
     ?.find((log) => log.correctionSnapshotId === entry.id)?.correctionRequestId;
   if (!requestId) return;
   encounter.pendingChecks = (encounter.pendingChecks ?? []).filter((request) => request.id !== requestId);
+}
+
+async function undoLastResolvedRoll(encounter) {
+  if (!game.user.isGM) return;
+  const entry = [...(encounter.history ?? [])].reverse().find(isCheckSnapshot);
+  if (!entry) return ui.notifications.info("No resolved roll is available to undo.");
+  restoreLastCheck(encounter, entry);
+  discardUndoneCheckRequest(encounter, entry);
+  await Store.save(encounter);
+  game.socket.emit(SOCKET, { action: "refresh" });
+  tracker?.render({ force: true });
+  renderInfluenceSidebar();
+  renderCinematicHud();
+  ui.notifications.info(`Undid roll: ${entry.label}. The PC can make that check again.`);
 }
 
 function balancedChasePoints(basePoints, participantCount, designedPartySize) {
@@ -2310,15 +2292,14 @@ function openGMTools(tracker, encounter) {
   const buttons = [];
   if (encounter?.status === "active") {
     buttons.push(
-      { action: "reset", icon: "fas fa-rotate", label: "Reset Actions", callback: () => invoke("reset-actions") },
       { action: "test", icon: "fas fa-flask", label: "Test Player Check", callback: () => invoke("test-player-check") },
-      { action: "reset-encounter", icon: "fas fa-arrow-rotate-left", label: "Reset Encounter", callback: () => invoke("reset-encounter") }
+      { action: "reset-encounter", icon: "fas fa-arrow-rotate-left", label: "Reset Entire Encounter…", callback: () => invoke("reset-encounter") },
+      { action: "undo", icon: "fas fa-rotate-left", label: "Undo Roll", callback: () => invoke("undo") }
     );
     if (encounter.subsystemType !== "starship") buttons.push(
       { action: "subtract", icon: "fas fa-minus", label: `-1 ${pointLabel}`, callback: () => invoke("change-ip", { delta: "-1" }) },
       { action: "add", icon: "fas fa-plus", label: `+1 ${pointLabel}`, callback: () => invoke("change-ip", { delta: "1" }) },
-      { action: "set", icon: "fas fa-sliders", label: `Set ${pointLabel}`, callback: () => invoke("adjust") },
-      { action: "undo", icon: "fas fa-rotate-left", label: "Undo Last Check", callback: () => invoke("undo") }
+      { action: "set", icon: "fas fa-sliders", label: `Set ${pointLabel}`, callback: () => invoke("adjust") }
     );
     if (encounter.subsystemType === "infiltration") buttons.push(
       { action: "edge", icon: "fas fa-diamond", label: "Spend Edge Point", callback: () => invoke("spend-edge") },
@@ -2331,7 +2312,7 @@ function openGMTools(tracker, encounter) {
   if (encounter?.subsystemType === "chase" && encounter?.chaseOutcome === "victory" && encounter?.victorySplashMode === "manual" && !encounter?.victorySplashShown) buttons.push({ action: "splash", icon: "fas fa-trophy", label: "Show Victory Splash", callback: () => invoke("victory-splash") });
   new DialogV2({
     window: { title: "GM Tools" },
-    content: `<p class="hint">Test Player Check uses the normal request, approval, roll, and chat-card pipeline as the selected PC. Reset Encounter clears live progress, pending checks, and the check log while keeping this encounter's configuration.</p>`,
+    content: `<p class="hint">Undo Roll removes the latest resolved roll and restores the encounter to exactly the state immediately before it. Use it repeatedly to walk backward through the encounter's rolls. Test Player Check uses the normal request, approval, roll, and chat-card pipeline as the selected PC. Reset Entire Encounter clears all live progress, points, pending checks, discoveries, and the check log while keeping encounter setup.</p>`,
     buttons: [...buttons, { action: "close", label: "Close", default: true }]
   }).render({ force: true });
 }
@@ -2347,7 +2328,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       "declare-starship-outcome", "select-participant", "select-npc", "request", "adjudicate-request",
       "cancel-request", "resolve-request-manually", "reopen-player-roll", "forget-request", "roll-approved-check", "submit-approved-check", "open-for-players", "pause", "resume", "victory-splash", "reveal-influence-rewards",
       "undo", "next-round", "prior", "advance", "pass-obstacle", "adjust", "change-ip", "apply-reward",
-      "reset-actions", "reset-encounter", "test-player-check", "declare-skill-outcome", "declare-chase-outcome", "declare-infiltration-outcome", "spend-edge", "adjust-infiltration-resource", "trigger-infiltration-complication",
+      "reset-encounter", "test-player-check", "declare-skill-outcome", "declare-chase-outcome", "declare-infiltration-outcome", "spend-edge", "adjust-infiltration-resource", "trigger-infiltration-complication",
       "end-encounter", "remove-effect", "resolve-pending-discovery", "correct-outcome", "open-gm-tools", "designate-skill-actor", "reveal-next-skill-challenge", "record-ordered-skill-result"
     ].map((action) => [action, function(event, target) { return this._action(event, target); }]))
   };
@@ -2539,6 +2520,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       if (!game.user.isGM) return;
       return openGMTools(this, encounter);
     }
+    if (action === "undo") return undoLastResolvedRoll(encounter);
     if (action === "roll-approved-check") return rollApprovedPlayerCheck(encounter.id, target.dataset.id);
     if (action === "submit-approved-check") return submitApprovedPlayerCheck(encounter.id, target.dataset.id);
     if (encounter.subsystemType === "starship") {
@@ -2677,12 +2659,6 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       snapshot(encounter, "Reveal Influence Outcomes");
       encounter.influenceRewardsManuallyRevealed = true;
       announceInfluenceRewardsAfterSave = true;
-    } else if (action === "undo") {
-      const entry = [...(encounter.history ?? [])].reverse().find(isCheckSnapshot);
-      if (!entry) return ui.notifications.info("No resolved check is available to undo.");
-      restoreLastCheck(encounter, entry);
-      discardUndoneCheckRequest(encounter, entry);
-      ui.notifications.info(`Removed the last check: ${entry.label}. The PC can make a new check.`);
     } else if (action === "next-round") {
       if (encounter.subsystemType === "research") {
         if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before ending the Research interval.");
@@ -2881,16 +2857,6 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
       snapshot(encounter, boon.label);
       targetNpc.points = Math.max(0, Number(targetNpc.points) + Number(boon.value));
       boon.applied = true;
-    } else if (action === "reset-actions") {
-      snapshot(encounter, action);
-      const resetCount = Object.keys(encounter.actorsActed ?? {}).length;
-      encounter.actorsActed = {};
-      // Influence phases retain their action state for Prior/Next Phase.
-      // Resetting the visible action state must reset that phase cache too,
-      // or navigating away and back can resurrect the old spent actions.
-      encounter.phaseActions ??= {};
-      if (encounter.subsystemType === "influence") encounter.phaseActions[encounter.currentPhase] = {};
-      ui.notifications.info(`Reset ${resetCount} action${resetCount === 1 ? "" : "s"} for the current ${encounter.subsystemType === "influence" ? "phase" : encounter.subsystemType === "research" ? "research interval" : "round"}.`);
     } else if (action === "declare-skill-outcome") {
       if (encounter.subsystemType !== "skill" || encounter.skillVictoryMode !== "gm") return;
       if (encounter.pendingChecks.length) return ui.notifications.warn("Resolve or cancel pending checks before declaring the outcome.");

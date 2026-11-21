@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.36 — 2026-11-20
+
+- Replaced the misleading **Reset Actions** control with **Undo Roll**. It restores the exact runtime state immediately before the latest resolved roll, removes its log and encounter effects, and can be used repeatedly to walk backward through a test run.
+- Made **Undo Roll** available in GM Tools for every encounter type, including Starship.
+
 ## 0.8.35 — 2026-11-20
 
 - Added Research Interval flow: every participant gets one check per interval, the tracker clearly shows the current interval, and the GM can be prompted to start the next interval once everyone has acted.
