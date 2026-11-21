@@ -172,6 +172,10 @@ test("only actual Fortune replacements auto-submit an approved player roll", () 
     "every native Fortune replacement can recover its pending check");
   assert.match(createdReroll, /autoSubmit: fortuneReplacement/,
     "every native Fortune replacement auto-submits through the shared player-roll pipeline");
+  const updatedReroll = between('Hooks.on("updateChatMessage"', 'Hooks.on("canvasReady"');
+  assert.match(updatedReroll, /const fortuneReplacement = hasFortuneReplacement\(message\);/);
+  assert.match(updatedReroll, /changed\.rolls \|\| fortuneReplacement/,
+    "a Mythic replacement flag update auto-submits even when PF2e omits changed.rolls");
 });
 
 test("newer Fortune results cannot be overwritten by a stale roll record", () => {

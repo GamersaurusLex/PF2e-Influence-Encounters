@@ -6538,7 +6538,14 @@ Hooks.on("createChatMessage", (message) => {
 Hooks.on("updateChatMessage", (message, changed) => {
   if (chatMessageAuthorId(message) !== game.user.id) return;
   const requestId = pendingCheckIdFromMessage(message);
-  if (requestId) trackPlayerRollMessage(message, requestId, { autoSubmit: !!changed.rolls && hasFortuneReplacement(message) });
+  // PF2e can record Rewrite Fate as a context/flag update on the existing
+  // card without including `rolls` in the changed payload. Once the message
+  // itself identifies a Fortune replacement, finalize it regardless of which
+  // message field carried that update.
+  const fortuneReplacement = hasFortuneReplacement(message);
+  if (requestId && (changed.rolls || fortuneReplacement)) {
+    trackPlayerRollMessage(message, requestId, { autoSubmit: fortuneReplacement });
+  }
 });
 
 Hooks.on("canvasReady", () => { renderInfluenceSidebar(); renderCinematicHud(); });
