@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.38 — 2026-11-20
+
+- Fixed Mythic **Rewrite Fate** and other Fortune rerolls for player-owned pending checks when PF2e preserves a GM-authored chat card. The pending-check ID and matching actor now identify the reroll, so its result automatically resolves the check and removes **Keep Result**.
+
 ## 0.8.37 — 2026-11-20
 
 - Fixed native **Rewrite Fate** and other Fortune replacements that update an existing chat card through PF2e context flags rather than a `rolls` update. Their replacement result now automatically finalizes every automated encounter check and removes **Keep Result**.

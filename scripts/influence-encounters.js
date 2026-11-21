@@ -6499,8 +6499,15 @@ function hasFortuneReplacement(message) {
 }
 
 async function trackPlayerRollMessage(message, requestId, { autoSubmit = false } = {}) {
-  if (!requestId || chatMessageAuthorId(message) !== game.user.id) return;
-  if (message.getFlag(MODULE_ID, "pendingCheckId") !== requestId) await message.setFlag(MODULE_ID, "pendingCheckId", requestId);
+  if (!requestId) return;
+  // A Fortune reroll can keep the original card's author (often the GM in a
+  // GM-test flow) even though the player who owns the pending check clicks it.
+  // The pending-check ID and actor are the authoritative link, not authorship.
+  // Only its author attempts to persist a missing flag; other clients can still
+  // report a roll already linked through PF2e's context options.
+  if (message.getFlag(MODULE_ID, "pendingCheckId") !== requestId && chatMessageAuthorId(message) === game.user.id) {
+    await message.setFlag(MODULE_ID, "pendingCheckId", requestId);
+  }
   // PF2e keeps a Hero Point reroll on the original card and appends the
   // replacement roll. The final roll is always the last roll on that card.
   const roll = message.rolls?.at(-1);
@@ -6515,6 +6522,8 @@ async function trackPlayerRollMessage(message, requestId, { autoSubmit = false }
   ) ?? null;
   const request = encounter?.pendingChecks?.find((entry) => entry.id === requestId);
   if (!request || request.requesterId !== game.user.id) return;
+  const actorId = message.actor?.id ?? message.speaker?.actor;
+  if (actorId && request.actorId && actorId !== request.actorId) return;
   return reportPlayerRoll({ encounterId: encounter.id, requestId, userId: game.user.id, total, degree, messageId: message.id, recordedAt: Number(message.timestamp) || Date.now(), autoSubmit });
 }
 
@@ -6525,7 +6534,6 @@ Hooks.on("preDeleteChatMessage", (message) => {
 });
 
 Hooks.on("createChatMessage", (message) => {
-  if (chatMessageAuthorId(message) !== game.user.id) return;
   const actorId = message.actor?.id ?? message.speaker?.actor;
   const fortuneReplacement = hasFortuneReplacement(message);
   const requestId = pendingCheckIdFromMessage(message)
@@ -6536,7 +6544,6 @@ Hooks.on("createChatMessage", (message) => {
 });
 
 Hooks.on("updateChatMessage", (message, changed) => {
-  if (chatMessageAuthorId(message) !== game.user.id) return;
   const requestId = pendingCheckIdFromMessage(message);
   // PF2e can record Rewrite Fate as a context/flag update on the existing
   // card without including `rolls` in the changed payload. Once the message

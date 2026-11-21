@@ -141,6 +141,11 @@ test("approved player rolls use PF2e's native visible-or-blind card and preserve
   const rerollTracking = between("async function trackPlayerRollMessage", "Hooks.on(\"preDeleteChatMessage\"");
   assert.match(rerollTracking, /Object\.values\(Store\.all\(\)\)/);
   assert.match(rerollTracking, /message\.rolls\?\.at\(-1\)/);
+  assert.doesNotMatch(rerollTracking, /chatMessageAuthorId\(message\) !== game\.user\.id/,
+    "the pending-check owner can report a reroll even when PF2e preserves a GM-authored card");
+  assert.match(rerollTracking, /const actorId = message\.actor\?\.id \?\? message\.speaker\?\.actor/);
+  assert.match(rerollTracking, /if \(actorId && request\.actorId && actorId !== request\.actorId\) return;/,
+    "a pending-check link still verifies the roll's actor");
   assert.match(source, /Hooks\.on\(["']preDeleteChatMessage["']/);
   assert.match(source, /Hooks\.on\(["']updateChatMessage["']/);
   assert.match(source, /check:reroll/);
@@ -173,6 +178,10 @@ test("only actual Fortune replacements auto-submit an approved player roll", () 
   assert.match(createdReroll, /autoSubmit: fortuneReplacement/,
     "every native Fortune replacement auto-submits through the shared player-roll pipeline");
   const updatedReroll = between('Hooks.on("updateChatMessage"', 'Hooks.on("canvasReady"');
+  assert.doesNotMatch(createdReroll, /chatMessageAuthorId\(message\) !== game\.user\.id/,
+    "the request owner tracks a replacement card even if PF2e leaves its author as the GM");
+  assert.doesNotMatch(updatedReroll, /chatMessageAuthorId\(message\) !== game\.user\.id/,
+    "the request owner tracks an updated replacement card even if it has a different author");
   assert.match(updatedReroll, /const fortuneReplacement = hasFortuneReplacement\(message\);/);
   assert.match(updatedReroll, /changed\.rolls \|\| fortuneReplacement/,
     "a Mythic replacement flag update auto-submits even when PF2e omits changed.rolls");
