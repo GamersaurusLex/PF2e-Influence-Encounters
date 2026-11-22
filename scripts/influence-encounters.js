@@ -2428,6 +2428,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
         : entry.outcome
     }));
     const npcs = visibleNpcs.map((npc) => ({ ...npc, name: targetDisplayName(npc), active: npc.id === activeNpc?.id,
+      thumbnail: carouselRecordBackdropSource(encounter, npc) || npc.image || encounter.image,
       researchActorState: isResearch && selection.actorId ? researchActorState(npc, selection.actorId) : null,
       subjectHere: isChase && !isBeatClock && !obscureChaseCourse && encounter.npcs.indexOf(npc) === encounter.opponentPosition, showPoints: game.user.isGM || encounter.publicPoints }));
     const subjectRole = String(encounter?.chaseSubject?.label || "Subject").trim();
@@ -2473,7 +2474,9 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     const orderedChallenge = orderedSkill ? activeNpcRecord : null;
     const orderedSkillStatus = orderedChallenge ? orderedSkillChallengeStatus(encounter, orderedChallenge) : "";
     const canRevealNextSkillChallenge = game.user.isGM && orderedSkill && encounter?.status === "active" && !encounter?.skillOutcome && skillChallengeReady(encounter, orderedChallenge) && !(encounter?.pendingChecks?.length);
-    return { encounter, activeNpc, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, manualInfluence, playerSingleInfluence, playerDescription, showParticipantRoster, showParticipantSelector, showTargetSelector, showNoControlledActors, selectedActorName: selectedActor ? participantDisplayName(encounter, selectedActor) : "", checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints, orderedSkill, orderedChallenge, orderedSkillStatus, canRevealNextSkillChallenge,
+    const headerImage = isChase ? encounter.image : activeNpc?.image || encounter.image;
+    const headerImageAlt = isChase ? encounter.name : activeNpc?.name || encounter.name;
+    return { encounter, activeNpc, headerImage, headerImageAlt, actors, controlledActors, npcs, thresholds, knownDiscoveries, knownInfluenceSkills, manualMode, manualInfluence, playerSingleInfluence, playerDescription, showParticipantRoster, showParticipantSelector, showTargetSelector, showNoControlledActors, selectedActorName: selectedActor ? participantDisplayName(encounter, selectedActor) : "", checkLog, overcomeChecks, researchChecks, isResearch, isChase, isSkill, isInfiltration, isBeatClock, individualSkillScoring, goalBasedSkillEncounter, obscureChaseCourse, chaseSubjectStatus, tableSpotlight, infiltrationObjective: infiltrationObjectiveView, infiltration: encounter?.infiltration, edgePoints, orderedSkill, orderedChallenge, orderedSkillStatus, canRevealNextSkillChallenge,
       researchActorLabel: selectedResearchActor ? participantDisplayName(encounter, selectedResearchActor) : "Selected PC",
       pointLabel: isResearch ? "RP" : isChase ? "CP" : isSkill ? "SP" : isInfiltration ? "IP" : "IP", targetLabel: isResearch ? "Research Sources" : isChase ? "Chase Course" : isSkill ? "Skill Challenges" : isInfiltration ? "Infiltration Obstacles" : "Influence Targets",
       actionLabel: isResearch ? "Research" : (isChase || isSkill || isInfiltration) ? "Make a Check" : "Influence", currentPoints,
@@ -2940,7 +2943,27 @@ function carouselBackdropId(encounter) {
     const objective = infiltration?.objectives?.find((entry) => entry.id === activeObstacle?.infiltrationObjectiveId);
     if (objective?.id && config.objectiveBackdrops[objective.id]) return config.objectiveBackdrops[objective.id];
   }
-  return config.phaseBackdrops[String(encounter.currentPhase)] || config.defaultBackdropId || "";
+  // Only Influence encounters have phase progression. Chase, Research, Skill,
+  // and Infiltration presentations advance through their active record above.
+  return (encounter.subsystemType === "influence" ? config.phaseBackdrops[String(encounter.currentPhase)] : "") || config.defaultBackdropId || "";
+}
+
+function carouselBackdropSource(encounter, backdropId) {
+  if (!backdropId || encounter?.sceneCarousel?.mode === "cinematic") return "";
+  const scene = carouselScene(encounter);
+  const api = sceneCarouselApi();
+  if (!scene || !api) return "";
+  try { return api.getBackdrops(scene).find((backdrop) => backdrop.id === backdropId)?.src || ""; }
+  catch (error) {
+    console.warn(`${MODULE_ID} | Could not read Scene Carousel backdrops`, error);
+    return "";
+  }
+}
+
+function carouselRecordBackdropSource(encounter, record) {
+  const config = encounter?.sceneCarousel;
+  const backdropId = config?.targetBackdrops?.[record?.id] || config?.defaultBackdropId || "";
+  return carouselBackdropSource(encounter, backdropId);
 }
 
 function carouselPresentationReady(encounter) {
@@ -4072,6 +4095,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   async _prepareContext(options) {
     const context = await super._prepareContext(options);
     const isResearch = this.encounter.subsystemType === "research";
+    const isInfluence = this.encounter.subsystemType === "influence";
     const isChase = this.encounter.subsystemType === "chase";
     const isSkill = this.encounter.subsystemType === "skill";
     const isInfiltration = this.encounter.subsystemType === "infiltration";
@@ -4135,6 +4159,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       ...context,
       encounter: encounterView,
       isResearch,
+      isInfluence,
       isChase,
       isSkill,
       isInfiltration,
@@ -4179,8 +4204,16 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       carouselScenes,
       carouselBackdropChoices,
       carouselConfigSceneName: carouselConfigScene?.name ?? "",
-      carouselPhaseRows: Array.from({ length: Math.max(1, Number(this.encounter.phases) || 1) }, (_, index) => ({ phase: index + 1, backdropId: this.encounter.sceneCarousel.phaseBackdrops[String(index + 1)] ?? "" })),
+      carouselPhaseRows: isInfluence
+        ? Array.from({ length: Math.max(1, Number(this.encounter.phases) || 1) }, (_, index) => ({ phase: index + 1, backdropId: this.encounter.sceneCarousel.phaseBackdrops[String(index + 1)] ?? "" }))
+        : [],
       carouselTargetRows: encounterView.npcs.map((npc) => ({ id: npc.id, name: targetDisplayName(npc), backdropId: this.encounter.sceneCarousel.targetBackdrops[npc.id] ?? "" })),
+      carouselTargetBackdropLabel: isChase ? "Chase Obstacle Backdrops"
+        : isResearch ? "Research Source Backdrops"
+          : isSkill ? "Skill Challenge Backdrops"
+            : isInfiltration ? "Infiltration Obstacle Backdrops"
+              : "Influence Target Backdrops",
+      showCarouselTargetBackdrops: !isStarship && encounterView.npcs.length > 0,
       carouselObjectiveRows: (encounterView.infiltration?.objectives ?? []).map((objective) => ({ id: objective.id, name: objective.name, backdropId: this.encounter.sceneCarousel.objectiveBackdrops[objective.id] ?? "" })),
       carouselComplicationRows: (encounterView.infiltration?.complications ?? []).map((complication) => ({ id: complication.id, name: complication.name, backdropId: this.encounter.sceneCarousel.complicationBackdrops[complication.id] ?? "" })),
       infiltrationObjectiveChoices: Object.fromEntries(this.encounter.infiltration?.objectives?.map((objective) => [objective.id, objective.name]) ?? []),

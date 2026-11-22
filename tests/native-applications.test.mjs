@@ -251,11 +251,29 @@ test("Scene Carousel presentation uses its public API and keeps the cinematic fa
   assert.match(source, /hud\.innerHTML = "";/, "a valid Carousel mapping removes the full-screen cinematic stage");
   assert.match(source, /await carouselSceneToActivate\.activate\(\)/, "a tied Scene is activated only after the GM's native confirmation dialog");
   assert.match(editor, /Scene Carousel Presentation/);
+  assert.match(editor, /<label>Encounter Icon<\/label>/,
+    "the editor distinguishes the compact encounter icon from cinematic imagery");
   assert.match(editor, /name="sceneCarousel\.mode"/);
+  assert.match(editor, /\{\{#if isInfluence\}\}<fieldset><legend>Influence Phase Backdrops<\/legend>/,
+    "phase selectors belong exclusively to Influence encounters");
+  assert.match(editor, /\{\{#if showCarouselTargetBackdrops\}\}<fieldset><legend>\{\{carouselTargetBackdropLabel\}\}<\/legend>/,
+    "each subsystem names its own actionable backdrop records");
   assert.match(editor, /name="sceneCarousel\.phaseBackdrops/);
   assert.match(editor, /name="sceneCarousel\.targetBackdrops/);
   assert.match(editor, /sceneCarousel\.objectiveBackdrops/);
   assert.match(editor, /sceneCarousel\.complicationBackdrops/);
+  const carouselBackdrop = between("function carouselBackdropId", "function carouselPresentationReady");
+  assert.match(carouselBackdrop, /encounter\.subsystemType === "influence" \? config\.phaseBackdrops/,
+    "non-Influence encounters never fall back to stale Influence phase mappings");
+  assert.match(source, /function carouselRecordBackdropSource\(encounter, record\)/,
+    "record cards can resolve the Scene Carousel image selected for that record");
+  assert.match(source, /thumbnail: carouselRecordBackdropSource\(encounter, npc\) \|\| npc\.image \|\| encounter\.image/,
+    "record cards fall back from Carousel art to their own image and then the encounter icon");
+  const tracker = await readFile(new URL("../templates/tracker.hbs", import.meta.url), "utf8");
+  assert.match(tracker, /<header class="encounter-header"><img src="\{\{headerImage\}\}" alt="\{\{headerImageAlt\}\}">/,
+    "the Chase header can use its encounter icon rather than an obstacle fallback icon");
+  assert.match(tracker, /<img src="\{\{thumbnail\}\}" alt="">/,
+    "record cards use their presentation thumbnail");
 });
 
 test("critical discovery offers preserve their exact encounter context and ignore blank configured skills", () => {

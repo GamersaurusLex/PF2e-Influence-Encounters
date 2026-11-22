@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.40 — 2026-11-22
+
+- Removed the erroneous **Influence Phase Backdrops** controls from Chase, Research, Skill, and Infiltration editors. Each encounter type now names only the records it can present.
+- Chase headers now use the **Encounter Icon**. Chase obstacle cards show their assigned Scene Carousel backdrop, falling back through the obstacle image and encounter icon.
+- Renamed **Encounter Image** to **Encounter Icon** to distinguish it from Cinematic Background and Scene Carousel backdrops.
+
 ## 0.8.39 — 2026-11-22
 
 - Added optional **Scene Carousel** presentation for every encounter type. An encounter can retain its cinematic overlay, use the currently active Scene, or be tied to a chosen Scene.
