@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.39 — 2026-11-22
+
+- Added optional **Scene Carousel** presentation for every encounter type. An encounter can retain its cinematic overlay, use the currently active Scene, or be tied to a chosen Scene.
+- Added GM backdrop assignments for the default encounter state, Influence phases, every target/source/obstacle/challenge, and Infiltration objectives and complications.
+- When a valid Carousel assignment is available, the module changes only the Scene backdrop and leaves the canvas interactive. A tied inactive Scene prompts the GM to activate it before the encounter begins; unavailable Carousel content safely falls back to the existing cinematic presentation.
+
 ## 0.8.38 — 2026-11-20
 
 - Fixed Mythic **Rewrite Fate** and other Fortune rerolls for player-owned pending checks when PF2e preserves a GM-authored chat card. The pending-check ID and matching actor now identify the reroll, so its result automatically resolves the check and removes **Keep Result**.

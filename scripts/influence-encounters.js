@@ -805,6 +805,14 @@ function normalizeEncounterCollections(encounter) {
   if (encounter.id && encounter.id === activeId && encounter.status !== "paused") encounter.status = "active";
   else if (!["draft", "active", "paused", "complete"].includes(encounter.status)) encounter.status = "draft";
   encounter.subsystemType = ["influence", "research", "chase", "skill", "infiltration", "starship"].includes(encounter.subsystemType) ? encounter.subsystemType : "influence";
+  encounter.sceneCarousel = foundry.utils.mergeObject({
+    mode: "cinematic", sceneId: "", defaultBackdropId: "", phaseBackdrops: {}, targetBackdrops: {},
+    objectiveBackdrops: {}, complicationBackdrops: {}
+  }, encounter.sceneCarousel ?? {}, { inplace: false, overwrite: true });
+  encounter.sceneCarousel.mode = ["cinematic", "scene", "current"].includes(encounter.sceneCarousel.mode) ? encounter.sceneCarousel.mode : "cinematic";
+  for (const key of ["phaseBackdrops", "targetBackdrops", "objectiveBackdrops", "complicationBackdrops"]) {
+    if (!encounter.sceneCarousel[key] || typeof encounter.sceneCarousel[key] !== "object") encounter.sceneCarousel[key] = {};
+  }
   if (encounter.subsystemType === "starship") {
     const savedShips = deepClone(encounter.starship?.ships ?? {});
     const savedGunnerActivities = indexedArray(encounter.starship?.roles).find((role) => role.id === "gunner")?.activities;
@@ -1111,6 +1119,7 @@ const DEFAULT_ENCOUNTER = {
   backgroundImage: DEFAULT_CINEMATIC_IMAGE,
   backgroundBlur: 6,
   presentationVisible: true,
+  sceneCarousel: { mode: "cinematic", sceneId: "", defaultBackdropId: "", phaseBackdrops: {}, targetBackdrops: {}, objectiveBackdrops: {}, complicationBackdrops: {} },
   journalId: "",
   endedAt: null,
   level: 0,
@@ -2906,6 +2915,63 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 }
 
+let lastCarouselPresentationKey = "";
+
+function sceneCarouselApi() {
+  const module = game.modules.get("scene-carousel");
+  const api = module?.active ? module.api : null;
+  return api && typeof api.getBackdrops === "function" && typeof api.activate === "function" ? api : null;
+}
+
+function carouselScene(encounter) {
+  const config = encounter?.sceneCarousel;
+  if (!config || config.mode === "cinematic") return null;
+  return config.mode === "scene" ? game.scenes.get(config.sceneId) ?? null : canvas.scene ?? null;
+}
+
+function carouselBackdropId(encounter) {
+  const config = encounter.sceneCarousel;
+  const infiltration = encounter.subsystemType === "infiltration" ? encounter.infiltration : null;
+  const activeObstacle = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
+  const activeComplication = infiltration?.complications?.find((entry) => entry.runtimeObstacleId === encounter.activeNpcId && entry.triggered && !entry.resolved);
+  if (activeComplication?.id && config.complicationBackdrops[activeComplication.id]) return config.complicationBackdrops[activeComplication.id];
+  if (activeObstacle?.id && config.targetBackdrops[activeObstacle.id]) return config.targetBackdrops[activeObstacle.id];
+  if (encounter.subsystemType === "infiltration") {
+    const objective = infiltration?.objectives?.find((entry) => entry.id === activeObstacle?.infiltrationObjectiveId);
+    if (objective?.id && config.objectiveBackdrops[objective.id]) return config.objectiveBackdrops[objective.id];
+  }
+  return config.phaseBackdrops[String(encounter.currentPhase)] || config.defaultBackdropId || "";
+}
+
+function carouselPresentationReady(encounter) {
+  const scene = carouselScene(encounter);
+  const api = sceneCarouselApi();
+  if (!scene || !api || canvas.scene?.id !== scene.id) return false;
+  const backdropId = carouselBackdropId(encounter);
+  try { return !!backdropId && api.getBackdrops(scene).some((backdrop) => backdrop.id === backdropId); }
+  catch (error) {
+    console.warn(`${MODULE_ID} | Could not read Scene Carousel backdrops`, error);
+    return false;
+  }
+}
+
+async function syncCarouselPresentation(encounter, { notify = false } = {}) {
+  if (!game.user.isGM || !carouselPresentationReady(encounter)) return false;
+  const scene = carouselScene(encounter);
+  const backdropId = carouselBackdropId(encounter);
+  const key = `${encounter.id}:${scene.id}:${backdropId}`;
+  if (key === lastCarouselPresentationKey) return true;
+  try {
+    await sceneCarouselApi().activate(scene, backdropId);
+    lastCarouselPresentationKey = key;
+    return true;
+  } catch (error) {
+    console.error(`${MODULE_ID} | Scene Carousel backdrop change failed`, error);
+    if (notify) ui.notifications.warn("Scene Carousel could not switch to that backdrop. The encounter's cinematic overlay is still available.");
+    return false;
+  }
+}
+
 function renderCinematicHud() {
   let hud = document.getElementById("influence-cinematic-hud");
   if (!hud) {
@@ -2915,6 +2981,12 @@ function renderCinematicHud() {
   }
   const encounter = Store.get();
   if (!encounter || encounter.status !== "active" || !encounter.presentationVisible) {
+    hud.className = "";
+    hud.innerHTML = "";
+    return;
+  }
+  if (carouselPresentationReady(encounter)) {
+    void syncCarouselPresentation(encounter);
     hud.className = "";
     hud.innerHTML = "";
     return;
@@ -3593,6 +3665,19 @@ function showEncounterContextMenu(event, encounterId) {
 async function activateEncounter(id) {
   const encounter = Store.get(id);
   if (!encounter) return;
+  const carouselSceneToActivate = carouselScene(encounter);
+  if (encounter.sceneCarousel?.mode === "scene" && carouselSceneToActivate && canvas.scene?.id !== carouselSceneToActivate.id) {
+    const choice = await foundry.applications.api.DialogV2.wait({
+      window: { title: "Activate Encounter Scene" },
+      content: `<p><strong>${esc(encounter.name)}</strong> is tied to <strong>${esc(carouselSceneToActivate.name)}</strong>.</p><p>Activate that Scene and present the encounter through its Scene Carousel backdrops?</p>`,
+      buttons: [
+        { action: "activate", icon: "fa-solid fa-play", label: "Activate Scene", default: true },
+        { action: "cancel", icon: "fa-solid fa-xmark", label: "Cancel" }
+      ]
+    });
+    if (choice !== "activate") return;
+    await carouselSceneToActivate.activate();
+  }
   if (encounter.subsystemType === "starship" && encounter.status === "draft") {
     encounter.currentRound = 1;
     encounter.actorsActed = {};
@@ -3638,6 +3723,7 @@ async function activateEncounter(id) {
   };
   await Store.setActive(id);
   await Store.save(encounter);
+  await syncCarouselPresentation(encounter, { notify: true });
   renderTracker(true);
   renderInfluenceSidebar();
   renderCinematicHud();
@@ -4030,6 +4116,21 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       delete tabs.starship;
     }
     const chasePositionOptions = Object.fromEntries(this.encounter.npcs.map((npc, index) => [index, `${index + 1} — ${targetDisplayName(npc)}`]));
+    const carouselApi = sceneCarouselApi();
+    const carouselScenes = game.scenes.contents
+      .slice().sort((a, b) => a.name.localeCompare(b.name))
+      .map((scene) => ({ id: scene.id, name: scene.name, active: scene.id === canvas.scene?.id }));
+    const carouselSceneId = this.encounter.sceneCarousel.mode === "scene"
+      ? this.encounter.sceneCarousel.sceneId
+      : canvas.scene?.id;
+    const carouselConfigScene = game.scenes.get(carouselSceneId);
+    let carouselBackdrops = [];
+    try { carouselBackdrops = carouselApi && carouselConfigScene ? carouselApi.getBackdrops(carouselConfigScene) : []; }
+    catch (error) { console.warn(`${MODULE_ID} | Could not read Scene Carousel backdrops`, error); }
+    const carouselBackdropChoices = {
+      "": carouselApi ? (carouselConfigScene ? "Use the encounter fallback image" : "Choose a Scene with Scene Carousel backdrops") : "Scene Carousel is not active",
+      ...Object.fromEntries(carouselBackdrops.map((backdrop, index) => [backdrop.id, `${index + 1} — ${backdrop.name || backdrop.group || "Backdrop"}`]))
+    };
     return {
       ...context,
       encounter: encounterView,
@@ -4074,6 +4175,14 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       dcVisibilities: { exact: "Exact DCs", relative: "Relative difficulty", hidden: "Hidden" },
       victorySplashModes: { automatic: "Automatic when the chase is won", manual: "Manual GM trigger after victory" },
       chasePositionOptions,
+      carouselActive: !!carouselApi,
+      carouselScenes,
+      carouselBackdropChoices,
+      carouselConfigSceneName: carouselConfigScene?.name ?? "",
+      carouselPhaseRows: Array.from({ length: Math.max(1, Number(this.encounter.phases) || 1) }, (_, index) => ({ phase: index + 1, backdropId: this.encounter.sceneCarousel.phaseBackdrops[String(index + 1)] ?? "" })),
+      carouselTargetRows: encounterView.npcs.map((npc) => ({ id: npc.id, name: targetDisplayName(npc), backdropId: this.encounter.sceneCarousel.targetBackdrops[npc.id] ?? "" })),
+      carouselObjectiveRows: (encounterView.infiltration?.objectives ?? []).map((objective) => ({ id: objective.id, name: objective.name, backdropId: this.encounter.sceneCarousel.objectiveBackdrops[objective.id] ?? "" })),
+      carouselComplicationRows: (encounterView.infiltration?.complications ?? []).map((complication) => ({ id: complication.id, name: complication.name, backdropId: this.encounter.sceneCarousel.complicationBackdrops[complication.id] ?? "" })),
       infiltrationObjectiveChoices: Object.fromEntries(this.encounter.infiltration?.objectives?.map((objective) => [objective.id, objective.name]) ?? []),
       npcTargets: { ...((isChase || isSkill || isInfiltration) ? { "": (isChase || isInfiltration) ? "All obstacles" : "All challenges" } : {}), ...Object.fromEntries(this.encounter.npcs.map((npc) => [npc.id, targetDisplayName(npc)])) }
     };

@@ -239,6 +239,25 @@ test("creative approaches and recovery controls use the shared check pipeline", 
     "directly resolved starship checks remain public");
 });
 
+test("Scene Carousel presentation uses its public API and keeps the cinematic fallback", async () => {
+  const editor = await readFile(new URL("../templates/editor.hbs", import.meta.url), "utf8");
+  assert.match(source, /function sceneCarouselApi\(\)/);
+  assert.match(source, /game\.modules\.get\("scene-carousel"\)/);
+  assert.match(source, /typeof api\.getBackdrops === "function"/);
+  assert.match(source, /typeof api\.activate === "function"/);
+  assert.match(source, /async function syncCarouselPresentation/);
+  assert.match(source, /await sceneCarouselApi\(\)\.activate\(scene, backdropId\)/);
+  assert.match(source, /if \(carouselPresentationReady\(encounter\)\) \{/);
+  assert.match(source, /hud\.innerHTML = "";/, "a valid Carousel mapping removes the full-screen cinematic stage");
+  assert.match(source, /await carouselSceneToActivate\.activate\(\)/, "a tied Scene is activated only after the GM's native confirmation dialog");
+  assert.match(editor, /Scene Carousel Presentation/);
+  assert.match(editor, /name="sceneCarousel\.mode"/);
+  assert.match(editor, /name="sceneCarousel\.phaseBackdrops/);
+  assert.match(editor, /name="sceneCarousel\.targetBackdrops/);
+  assert.match(editor, /sceneCarousel\.objectiveBackdrops/);
+  assert.match(editor, /sceneCarousel\.complicationBackdrops/);
+});
+
 test("critical discovery offers preserve their exact encounter context and ignore blank configured skills", () => {
   const choices = between("function discoveryChoiceOptions", "async function collectDiscoveryChoices");
   assert.match(choices, /String\(skill\?\.slug \?\? ""\)\.trim\(\) && String\(skill\?\.label \?\? ""\)\.trim\(\)/,
