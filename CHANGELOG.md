@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.42 — 2026-11-27
+
+- Fixed Scene Carousel backdrop synchronization for all encounter types. The integration checks the current Carousel backdrop ID and actual tile image instead of caching its last request, so manual changes, stale tiles, replaced artwork, and returning to an encounter can be reconciled correctly.
+
 ## 0.8.41 — 2026-11-26
 
 - Added **Obstacle Order → Any order — PCs choose** for Beat the Clock chases. Each PC can select an unfinished obstacle independently; existing encounters default to sequential order.

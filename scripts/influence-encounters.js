@@ -2956,8 +2956,6 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 }
 
-let lastCarouselPresentationKey = "";
-
 function sceneCarouselApi() {
   const module = game.modules.get("scene-carousel");
   const api = module?.active ? module.api : null;
@@ -3020,11 +3018,13 @@ async function syncCarouselPresentation(encounter, { notify = false } = {}) {
   if (!game.user.isGM || !carouselPresentationReady(encounter)) return false;
   const scene = carouselScene(encounter);
   const backdropId = carouselBackdropId(encounter);
-  const key = `${encounter.id}:${scene.id}:${backdropId}`;
-  if (key === lastCarouselPresentationKey) return true;
+  // Carousel can change independently of the encounter. Read its documents,
+  // rather than treating a previous activation request as the current state.
+  const backdropSource = carouselBackdropSource(encounter, backdropId);
+  const backdropTile = scene.tiles.find((tile) => tile.getFlag("scene-carousel", "role") === "backdrop");
+  if (scene.getFlag("scene-carousel", "activeId") === backdropId && backdropTile?.texture.src === backdropSource) return true;
   try {
     await sceneCarouselApi().activate(scene, backdropId);
-    lastCarouselPresentationKey = key;
     return true;
   } catch (error) {
     console.error(`${MODULE_ID} | Scene Carousel backdrop change failed`, error);
