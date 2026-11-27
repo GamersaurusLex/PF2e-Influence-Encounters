@@ -96,11 +96,15 @@
         <div class="form-group"><label>Subject Pace</label><div class="form-fields"><input type="number" min="0" step="1" name="opponentPace" value="{{encounter.opponentPace}}"><span class="units">obstacle(s) per turn</span></div></div>
         <div class="form-group"><label>Subject Acts</label><div class="form-fields"><select name="subjectTurnOrder">{{selectOptions subjectTurnOrders selected=encounter.subjectTurnOrder}}</select></div></div>
         {{/unless}}
+        {{#if isBeatClock}}
+        <div class="form-group"><label>Obstacle Order</label><div class="form-fields"><select name="chaseObstacleOrder">{{selectOptions chaseObstacleOrders selected=encounter.chaseObstacleOrder}}</select></div></div>
+        <p class="hint">Any order lets each PC choose a different unfinished obstacle. Uncheck obscuring below to show every obstacle from the start.</p>
+        {{/if}}
         <div class="form-group"><label>Obstacle Visibility</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="obscureFutureObstacles" {{checked encounter.obscureFutureObstacles}}> Obscure future obstacles from players</label></div></div>
         {{#if isBeatClock}}
-        <p class="hint">Players see only completed obstacles and the current obstacle.</p>
+        <p class="hint">When checked, players see only completed obstacles and the current obstacle. When unchecked, players see all obstacles.</p>
         {{else}}
-        <p class="hint">Players see only completed obstacles and the current obstacle. The subject's exact position is replaced by a relative chase update.</p>
+        <p class="hint">When checked, players see only completed obstacles and the current obstacle. When unchecked, players see all obstacles. The subject's exact position is replaced by a relative chase update.</p>
         {{/if}}
         <div class="form-group"><label>Round Flow</label><div class="form-fields"><label class="checkbox"><input type="checkbox" name="promptAdvanceWhenAllActed" {{checked encounter.promptAdvanceWhenAllActed}}> Prompt the GM to advance after every participating PC acts</label></div></div>
         <div class="form-group"><label>DC Visibility</label><div class="form-fields"><select name="dcVisibility">{{selectOptions dcVisibilities selected=encounter.dcVisibility}}</select></div></div>

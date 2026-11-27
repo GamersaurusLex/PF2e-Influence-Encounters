@@ -44,6 +44,40 @@ function manualEncounterMode(encounter) {
   return !!setting && (game.settings.get(MODULE_ID, SETTINGS.manualModeAll) || game.settings.get(MODULE_ID, setting));
 }
 
+function freeChoiceChase(encounter) {
+  return encounter?.subsystemType === "chase" && encounter.chaseType === "beat-clock" && encounter.chaseObstacleOrder === "any";
+}
+
+function chaseObstacleComplete(npc) {
+  return !!npc && (npc.availability === "exhausted" || (Number(npc.maximumPoints) > 0 && Number(npc.points) >= Number(npc.maximumPoints)));
+}
+
+function chaseObstacleAvailable(encounter, npc) {
+  return !!npc && npc.availability !== "hidden" && !chaseObstacleComplete(npc)
+    && !encounter.chaseOutcome && (freeChoiceChase(encounter) || npc.id === encounter.activeNpcId);
+}
+
+function chaseObstacleVisible(encounter, npc, isGM = game.user.isGM) {
+  return !!npc && npc.availability !== "hidden" && (isGM || !encounter.obscureFutureObstacles || chaseObstacleComplete(npc)
+    || encounter.npcs.indexOf(npc) <= encounter.npcs.findIndex((entry) => entry.id === encounter.activeNpcId));
+}
+
+function advanceCompletedChaseObstacle(encounter, npc) {
+  npc.availability = "exhausted";
+  const index = encounter.npcs.indexOf(npc);
+  const next = freeChoiceChase(encounter)
+    ? encounter.npcs.find((entry) => !chaseObstacleComplete(entry) && entry.availability !== "hidden")
+    : encounter.npcs[index + 1];
+  if (!freeChoiceChase(encounter) || encounter.activeNpcId === npc.id) {
+    if (next) encounter.activeNpcId = next.id;
+  }
+  const won = freeChoiceChase(encounter)
+    ? encounter.npcs.every(chaseObstacleComplete)
+    : !next || (encounter.chaseType !== "beat-clock" && index + 1 >= encounter.opponentPosition);
+  if (won) encounter.chaseOutcome = "victory";
+  return { next, won };
+}
+
 function orderedSkillEncounter(encounter) {
   return encounter?.subsystemType === "skill" && !!encounter.orderedChallenges;
 }
@@ -914,6 +948,7 @@ function normalizeEncounterCollections(encounter) {
   encounter.opponentPace = Math.max(0, Math.trunc(Number(encounter.opponentPace ?? 1) || 0));
   encounter.subjectTurnOrder = ["before", "after"].includes(encounter.subjectTurnOrder) ? encounter.subjectTurnOrder : (encounter.chaseType === "run-away" ? "after" : "before");
   encounter.obscureFutureObstacles = !!encounter.obscureFutureObstacles;
+  encounter.chaseObstacleOrder = encounter.chaseObstacleOrder === "any" ? "any" : "ordered";
   encounter.chaseDesignedPartySize = Math.max(1, Math.trunc(Number(encounter.chaseDesignedPartySize) || 4));
   if (encounter.subsystemType === "research" && encounter.promptAdvanceWhenAllActed === undefined) encounter.promptAdvanceWhenAllActed = true;
   encounter.promptAdvanceWhenAllActed = !!encounter.promptAdvanceWhenAllActed;
@@ -1150,6 +1185,7 @@ const DEFAULT_ENCOUNTER = {
   opponentPace: 1,
   subjectTurnOrder: "before",
   obscureFutureObstacles: false,
+  chaseObstacleOrder: "ordered",
   chaseDesignedPartySize: 4,
   promptAdvanceWhenAllActed: false,
   roundLimit: 0,
@@ -2088,9 +2124,11 @@ function encounterViewSelection(encounter) {
     : owned.find((actor) => actor.id === game.user.character?.id && !encounter.actorsActed?.[actor.id])?.id
       ?? owned.find((actor) => !encounter.actorsActed?.[actor.id])?.id
       ?? (owned.some((actor) => actor.id === saved.actorId) ? saved.actorId : owned[0]?.id ?? "");
-  const selectableNpcs = encounter.npcs.filter((npc) => npc.availability !== "hidden");
+  const selectableNpcs = encounter.npcs.filter((npc) => encounter.subsystemType === "chase"
+    ? chaseObstacleAvailable(encounter, npc) && chaseObstacleVisible(encounter, npc)
+    : npc.availability !== "hidden");
   const savedNpcId = saved.npcIdsByActor?.[actorId] ?? saved.npcId;
-  const npcId = encounter.subsystemType === "chase"
+  const npcId = encounter.subsystemType === "chase" && !freeChoiceChase(encounter)
     ? encounter.activeNpcId
     : selectableNpcs.some((npc) => npc.id === savedNpcId)
     ? savedNpcId
@@ -2373,11 +2411,10 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     const actors = participants.map((actor) => ({ id: actor.id, name: participantDisplayName(encounter, actor), image: participantPortrait(actor), acted: !!encounter?.actorsActed?.[actor.id], skillPoints: isSkill ? skillActorPoints(encounter, actor.id) : 0 }));
     const controlledActors = actors.filter((entry) => game.user.isGM || canUserControlActor(game.actors.get(entry.id)))
       .map((entry) => ({ ...entry, selected: entry.id === selection.actorId }));
-    const activeObstacleIndex = isChase ? Math.max(0, encounter.npcs.findIndex((npc) => npc.id === encounter.activeNpcId)) : -1;
     const obscureChaseCourse = isChase && encounter.obscureFutureObstacles && !game.user.isGM;
     const selectedInfiltrationObjective = isInfiltration ? infiltrationActorObjective(encounter, selection.actorId) : null;
     const visibleNpcs = (encounter?.npcs ?? []).filter((npc, index) => npc.availability !== "hidden"
-      && (!obscureChaseCourse || index <= activeObstacleIndex)
+      && (!isChase || chaseObstacleVisible(encounter, npc))
       && (!orderedSkill || game.user.isGM || npc.id === encounter.activeNpcId)
       && (!isInfiltration || game.user.isGM || (selectedInfiltrationObjective && npc.infiltrationObjectiveId === selectedInfiltrationObjective.id && selectedInfiltrationObjective.visibleToPlayers && infiltrationObstacleVisibleToPlayer(encounter, npc, selection.actorId))));
     const activeNpcRecord = visibleNpcs.find((npc) => npc.id === selection.npcId)
@@ -2427,7 +2464,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
         ? (entry.outcome.includes("Invalid") ? "Failure" : entry.outcome.startsWith("Critical Success") ? "Critical Success" : entry.outcome.startsWith("Success") ? "Success" : "Failure")
         : entry.outcome
     }));
-    const npcs = visibleNpcs.map((npc) => ({ ...npc, name: targetDisplayName(npc), active: npc.id === activeNpc?.id,
+    const npcs = visibleNpcs.map((npc) => ({ ...npc, chaseComplete: isChase && chaseObstacleComplete(npc), chaseDisabled: isChase && !chaseObstacleAvailable(encounter, npc), name: targetDisplayName(npc), active: npc.id === activeNpc?.id,
       thumbnail: carouselRecordBackdropSource(encounter, npc) || npc.image || encounter.image,
       researchActorState: isResearch && selection.actorId ? researchActorState(npc, selection.actorId) : null,
       subjectHere: isChase && !isBeatClock && !obscureChaseCourse && encounter.npcs.indexOf(npc) === encounter.opponentPosition, showPoints: game.user.isGM || encounter.publicPoints }));
@@ -2449,7 +2486,7 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     const sourceAvailable = orderedSkill
       ? skillChallengeCanAct(encounter, activeNpcRecord, selection.actorId)
       : isChase
-      ? activeNpc?.availability !== "exhausted"
+      ? chaseObstacleAvailable(encounter, activeNpcRecord)
       : isInfiltration
         ? !!activeNpcRecord && !infiltrationObstacleComplete(activeNpcRecord, selection.actorId) && !activeNpcRecord.infiltrationNarrativeOnly && (!activeNpcRecord.infiltrationAssignedActorId || activeNpcRecord.infiltrationAssignedActorId === selection.actorId)
         : !isResearch || researchSourceAvailableForActor(activeNpcRecord, selection.actorId);
@@ -2579,7 +2616,8 @@ class InfluenceTracker extends HandlebarsApplicationMixin(ApplicationV2) {
     }
     if (action === "select-npc") {
       const npcId = target.dataset.npcId;
-      if (encounter.subsystemType === "chase" && npcId !== encounter.activeNpcId) return ui.notifications.info("Chase obstacles are attempted in order.");
+      const npc = encounter.npcs.find((entry) => entry.id === npcId);
+      if (encounter.subsystemType === "chase" && (!chaseObstacleAvailable(encounter, npc) || !chaseObstacleVisible(encounter, npc))) return ui.notifications.info("That chase obstacle is not available.");
       if (orderedSkillEncounter(encounter) && npcId !== encounter.activeNpcId) return ui.notifications.info("Reveal the next challenge after the current one is complete.");
       if (game.user.isGM) {
         encounter.activeNpcId = npcId;
@@ -3277,19 +3315,20 @@ function renderInfluenceSidebarContent() {
         ? `<button type="button" data-action="select-participant" data-id="${actor.id}" class="influence-sidebar-person ${acted ? "acted" : ""} ${selected ? "selected" : ""}" ${acted && !manualEncounterMode(encounter) ? "disabled" : ""} title="${acted && !manualEncounterMode(encounter) ? "This PC has already acted" : `Review as ${esc(participantDisplayName(encounter, actor))}`}">${contents}</button>`
         : `<div class="influence-sidebar-person ${acted ? "acted" : ""}">${contents}</div>`;
     }).join("");
-    const activeObstacleIndex = chase ? Math.max(0, encounter.npcs.findIndex((npc) => npc.id === encounter.activeNpcId)) : -1;
     const isBeatClock = chase && encounter.chaseType === "beat-clock";
     const obscureChaseCourse = chase && encounter.obscureFutureObstacles;
     const selectedInfiltrationObjective = infiltration ? infiltrationActorObjective(encounter, selection.actorId) : null;
     const visibleSources = encounter.npcs.filter((npc, index) => npc.availability !== "hidden"
-      && (!obscureChaseCourse || index <= activeObstacleIndex)
+      && (!chase || chaseObstacleVisible(encounter, npc, false))
       && (!infiltration || (selectedInfiltrationObjective && npc.infiltrationObjectiveId === selectedInfiltrationObjective.id && selectedInfiltrationObjective.visibleToPlayers && infiltrationObstacleVisibleToPlayer(encounter, npc, selection.actorId))));
     const npcRows = visibleSources.map((npc) => {
+      const completed = chase && chaseObstacleComplete(npc);
+      const disabled = chase && !chaseObstacleAvailable(encounter, npc);
       const subjectMarker = chase && !isBeatClock && !obscureChaseCourse && encounter.npcs.indexOf(npc) === encounter.opponentPosition ? ` <small><i class="fa-solid fa-location-dot"></i> ${esc(encounter.chaseSubject?.label || "Subject")}</small>` : "";
       const actorState = research && selection.actorId ? researchActorState(npc, selection.actorId) : null;
       const actorStatus = actorState ? ` <small>Your PC: ${encounter.publicPoints ? `${actorState.points}${actorState.maximum ? `/${actorState.maximum}` : ""} RP · ` : ""}${esc(actorState.availability)}</small>` : "";
       const sourceStatus = encounter.publicPoints ? ` <small>${npc.points}${npc.maximumPoints ? `/${npc.maximumPoints}` : ""} RP</small>` : "";
-      return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""}"><button data-action="select-npc" data-id="${npc.id}" title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${esc(targetDisplayName(npc))}${subjectMarker}${research ? `${sourceStatus}${actorStatus}` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
+      return `<div class="influence-sidebar-npc ${npc.id === selection.npcId ? "active" : ""} ${completed ? "chase-complete" : ""}"><button data-action="select-npc" data-id="${npc.id}" ${disabled ? "disabled" : ""} title="Review and select ${esc(targetDisplayName(npc))}"><img src="${esc(npc.image)}" alt=""><span>${completed ? '<i class="fa-solid fa-circle-check"></i> ' : ""}${esc(targetDisplayName(npc))}${completed ? " · Overcome" : ""}${subjectMarker}${research ? `${sourceStatus}${actorStatus}` : chase ? ` <small>${npc.points}/${npc.maximumPoints} CP</small>` : ""}</span></button></div>`;
     }).join("");
     const activeNpc = visibleSources.find((npc) => npc.id === selection.npcId)
       ?? visibleSources.find((npc) => npc.id === encounter.activeNpcId)
@@ -3974,6 +4013,10 @@ async function handleSidebarAction(event) {
   }
   const selection = encounterViewSelection(encounter);
   if (["discovery", "influence", "research", "chase", "skill"].includes(action)) return requestCheck(encounter, action, selection.actorId, selection.npcId);
+  if (action === "select-npc" && encounter.subsystemType === "chase") {
+    const npc = encounter.npcs.find((entry) => entry.id === event.currentTarget.dataset.id);
+    if (!chaseObstacleAvailable(encounter, npc) || !chaseObstacleVisible(encounter, npc)) return ui.notifications.info("That chase obstacle is not available.");
+  }
   if (action === "select-npc" && !game.user.isGM) {
     if (orderedSkillEncounter(encounter) && event.currentTarget.dataset.id !== encounter.activeNpcId) return ui.notifications.info("The GM has not revealed that challenge yet.");
     await setEncounterViewSelection(encounter, { npcId: event.currentTarget.dataset.id });
@@ -4193,6 +4236,7 @@ class EncounterEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       availabilityOptions: { hidden: "Hidden", available: "Available", exhausted: "Exhausted" },
       researchActorAvailabilityOptions: { available: "Available", unavailable: "Unavailable", exhausted: "Exhausted" },
       intervalUnits: { minute: "Minutes", hour: "Hours", day: "Days" },
+      chaseObstacleOrders: { ordered: "In order", any: "Any order — PCs choose" },
       chaseTypes: { "chase-down": "Chase Down", "run-away": "Run Away", "beat-clock": "Beat the Clock", competitive: "Competitive", custom: "Custom" },
       subjectTurnOrders: { before: "Before the party", after: "After the party" },
       skillScoringModes: { shared: "Shared party pool", individual: "Individual PC scores" },
@@ -4949,6 +4993,7 @@ async function requestCheck(encounter, type, selectedActorId = null, selectedNpc
   const isSkill = type === "skill" || encounter.subsystemType === "skill";
   const isInfiltration = type === "infiltration" || encounter.subsystemType === "infiltration";
   if (!npc) return ui.notifications.warn(isResearch ? "Choose a research source first." : isInfiltration ? "Choose an infiltration obstacle first." : "Choose an influence target first.");
+  if (isChase && (!chaseObstacleAvailable(encounter, npc) || !chaseObstacleVisible(encounter, npc))) return ui.notifications.warn("That chase obstacle is not available.");
   if (isResearch && (npc.availability !== "available" || (npc.maximumPoints && npc.points >= npc.maximumPoints))) return ui.notifications.warn(`${npc.name} is not currently available for further research.`);
   const actor = (selectedActorId ? game.actors.get(selectedActorId) : null)
     ?? canvas.tokens.controlled[0]?.actor
@@ -5019,7 +5064,7 @@ async function openGMTestPlayerCheck(encounter) {
   const availableNpcs = encounter.subsystemType === "skill" && orderedSkillEncounter(encounter)
     ? encounter.npcs.filter((npc) => npc.id === encounter.activeNpcId)
     : encounter.subsystemType === "chase"
-      ? encounter.npcs.filter((npc) => npc.id === encounter.activeNpcId)
+      ? encounter.npcs.filter((npc) => chaseObstacleAvailable(encounter, npc))
       : encounter.npcs;
   if (!availableNpcs.length) return ui.notifications.warn("This encounter has no available target to test.");
   const actorOptions = participants.map((actor) => `<option value="${esc(actor.id)}">${esc(participantDisplayName(encounter, actor))}</option>`).join("");
@@ -5545,6 +5590,7 @@ async function enqueueCheckRequest(payload) {
     if (encounter.starship.stage !== "actions" || roleId !== payload.roleId || !activity || !skill || encounter.actorsActed?.[actor.id]) return ui.notifications.warn("That crew action is no longer available.");
   }
   if (encounter.skillOutcome || encounter.chaseOutcome || encounter.infiltration?.outcome) return ui.notifications.warn("That encounter has already concluded.");
+  if (payload.type === "chase" && (!chaseObstacleAvailable(encounter, npc) || !chaseObstacleVisible(encounter, npc, !!game.users.get(payload.requesterId)?.isGM))) return ui.notifications.warn("That chase obstacle is not available.");
   if (payload.type === "skill" && orderedSkillEncounter(encounter)) {
     const current = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
     if (npc.id !== current?.id || !skillChallengeCanAct(encounter, current, actor.id)) {
@@ -5587,8 +5633,8 @@ async function adjudicate(request, { resolveManually = false } = {}) {
   const actorName = participantDisplayName(encounter, actor);
   const npcName = targetDisplayName(npc);
   if (encounter.actorsActed?.[actor.id]) return cancelPendingCheck(encounter.id, request.id, `${actorName} has already acted this round.`);
-  if (request.type === "chase" && (npc.id !== encounter.activeNpcId || npc.availability === "exhausted")) {
-    return cancelPendingCheck(encounter.id, request.id, `${npcName} is no longer the active obstacle.`);
+  if (request.type === "chase" && !chaseObstacleAvailable(encounter, npc)) {
+    return cancelPendingCheck(encounter.id, request.id, `${npcName} is no longer available.`);
   }
   if (request.type === "skill" && encounter.skillOutcome) return cancelPendingCheck(encounter.id, request.id, "The Skill Encounter has already concluded.");
   if (request.type === "skill" && orderedSkillEncounter(encounter) && !skillChallengeCanAct(encounter, npc, actor.id)) {
@@ -5871,7 +5917,8 @@ async function executeStarshipCheck(encounter, request, actor, role, activity, s
 
 async function executeCheck(encounter, request, actor, skill, selected, dcAdjust, resolvedRoll = null) {
   const adjudicationEffects = encounter.activeEffects ?? [];
-  const currentEncounter = Store.get(encounter.id);
+  // Outcome corrections already restored the authoritative pre-check snapshot.
+  const currentEncounter = resolvedRoll?.correction ? null : Store.get(encounter.id);
   if (currentEncounter) {
     const currentEffectIds = new Set((currentEncounter.activeEffects ?? []).map((effect) => effect.id));
     currentEncounter.activeEffects.push(...adjudicationEffects.filter((effect) => !currentEffectIds.has(effect.id)));
@@ -5879,6 +5926,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   }
   const npc = encounter.npcs.find((entry) => entry.id === request.npcId) ?? encounter.npcs[0];
   if (!npc) return ui.notifications.error("The influence target is no longer available.");
+  if (request.type === "chase" && (!chaseObstacleAvailable(encounter, npc) || encounter.actorsActed?.[actor.id])) return cancelPendingCheck(encounter.id, request.id, "That chase obstacle or PC is no longer available.");
   // Adjudication may have been opened from a slightly older encounter copy.
   // Rebind valid configured skills to this freshly loaded record so discoveries
   // and known Influence skills mutate the version that Store.save persists.
@@ -5994,16 +6042,10 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
     npc.points = Math.max(0, Math.min(npc.maximumPoints, Number(npc.points) + points));
     if (npc.maximumPoints && npc.points >= npc.maximumPoints) {
       chaseObstacleCompleted = true;
-      npc.availability = "exhausted";
-      const index = encounter.npcs.findIndex((entry) => entry.id === npc.id);
-      const next = encounter.npcs[index + 1];
-      if (next) encounter.activeNpcId = next.id;
-      if (!next || (encounter.chaseType !== "beat-clock" && index + 1 >= encounter.opponentPosition)) {
-        encounter.chaseOutcome = "victory";
-        chaseWonNow = true;
-      }
+      const { next, won } = advanceCompletedChaseObstacle(encounter, npc);
+      chaseWonNow = won;
       logEntry.detailLabel = "Chase Progress";
-      logEntry.details = [encounter.chaseOutcome === "victory" ? chaseVictoryMessage(encounter) : `${npcName} overcome. Next obstacle: ${targetDisplayName(next)}.`];
+      logEntry.details = [encounter.chaseOutcome === "victory" ? chaseVictoryMessage(encounter) : freeChoiceChase(encounter) ? `${npcName} overcome. Choose any remaining available obstacle.` : `${npcName} overcome. Next obstacle: ${targetDisplayName(next)}.`];
     }
   }
   let infiltrationObstacleCompleted = false;
@@ -6110,7 +6152,7 @@ async function executeCheck(encounter, request, actor, skill, selected, dcAdjust
   if (request.type === "chase" && npc.availability === "exhausted") {
     const next = encounter.npcs.find((entry) => entry.id === encounter.activeNpcId);
     await ChatMessage.create({
-      content: `<div class="influence-chat influence-result influence-reward"><strong>${encounter.chaseOutcome === "victory" ? "Chase Won" : `Obstacle Overcome — ${esc(npcName)}`}</strong><p>${esc(encounter.chaseOutcome === "victory" ? chaseVictoryMessage(encounter) : `Next: ${targetDisplayName(next)}`)}</p></div>`,
+      content: `<div class="influence-chat influence-result influence-reward"><strong>${encounter.chaseOutcome === "victory" ? "Chase Won" : `Obstacle Overcome — ${esc(npcName)}`}</strong><p>${esc(encounter.chaseOutcome === "victory" ? chaseVictoryMessage(encounter) : freeChoiceChase(encounter) ? "Choose any remaining available obstacle." : `Next: ${targetDisplayName(next)}`)}</p></div>`,
       style: CONST.CHAT_MESSAGE_STYLES.OOC,
       flags: { [MODULE_ID]: { messageKind: "result" } }
     });

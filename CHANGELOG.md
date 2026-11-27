@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.41 — 2026-11-26
+
+- Added **Obstacle Order → Any order — PCs choose** for Beat the Clock chases. Each PC can select an unfinished obstacle independently; existing encounters default to sequential order.
+- Clarified that unchecking **Obscure future obstacles from players** displays all obstacles.
+- Completed chase obstacles now display a checkmark and **Overcome**, remain visible, and cannot be selected for further checks.
+- Any-order victory requires every obstacle to be complete. Queued and approved checks are rejected if their obstacle has already been completed or their PC has already acted.
+- Outcome corrections preserve the restored pre-check snapshot rather than replacing it with the completed state.
+
 ## 0.8.40 — 2026-11-22
 
 - Removed the erroneous **Influence Phase Backdrops** controls from Chase, Research, Skill, and Infiltration editors. Each encounter type now names only the records it can present.
